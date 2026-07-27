@@ -11,6 +11,13 @@ an overlay at the pointer, on top of whatever window you are in.
 
 Choosing an entry pastes it straight into the window underneath.
 
+## Screenshots
+
+| Clipboard | GIF | Emoji |
+| :---: | :---: | :---: |
+| ![Clipboard history with a pinned entry and image thumbnails](docs/clipboard.png) | ![GIF tab showing favourites](docs/gif.png) | ![Emoji picker with category filters](docs/emoji.png) |
+| Text and images, pinned entries first | Favourites, copied GIFs, and GIFs found on disk | 1,914 emoji, searchable, with pins and recents |
+
 ## Why an extension and not an app
 
 Mutter does not implement the wlroots `data-control` protocol, so `wl-paste
