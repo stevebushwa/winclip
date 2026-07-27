@@ -3,10 +3,19 @@
 
 /* Turning image files into things the shell can draw.
  *
- * St has no animated-image widget, so GIFs are played by hand: one shared
- * ticker advances every visible GdkPixbufAnimation iterator and swaps the
- * actor's content. Registered actors unregister themselves on destroy, and the
- * ticker stops as soon as nothing is left to animate.
+ * St has no animated-image widget, so GIFs are played by hand. Three rules
+ * keep that from eating the compositor, all learned from a folder of 68 GIFs
+ * that decoded to 6.7 GB and hung the session:
+ *
+ *   1. Decode at thumbnail size. GdkPixbufAnimation.new_from_file decodes
+ *      every frame at full resolution — a 0.2 MB file holding 1263 frames of
+ *      772x673 becomes 2.6 GB. A PixbufLoader told to set_size during
+ *      size-prepared yields the same animation for a few MB.
+ *   2. Decode lazily, and only for what is playing. Building an animation for
+ *      every visible thumbnail is what exhausted memory.
+ *   3. Bound the frames retained. Frames materialise as the iterator advances
+ *      and are kept, so long animations restart at a cap rather than
+ *      accumulating.
  */
 
 import Clutter from 'gi://Clutter';
@@ -16,7 +25,8 @@ import GdkPixbuf from 'gi://GdkPixbuf';
 import St from 'gi://St';
 
 const TICK_MS = 40;
-const MAX_ACTIVE = 12;
+const MAX_ACTIVE = 6;    // animations playing at once
+const MAX_FRAMES = 60;   // frames cycled before a long GIF is restarted
 
 // Files we have already complained about, so a broken image does not fill the
 // journal. Cleared on disable along with the rest of this module's state.
@@ -64,10 +74,51 @@ function scaleToFit(pixbuf, maxW, maxH) {
         GdkPixbuf.InterpType.BILINEAR) ?? pixbuf;
 }
 
-/* A folder scan can turn up dozens of GIFs, and every animated frame costs a
- * rescale plus a GPU upload. Only a handful play at once; whatever the pointer
- * is over always wins a slot, so the one you are actually looking at moves.
+/**
+ * Decodes an animation directly at thumbnail size.
+ *
+ * The size-prepared handler is the whole point: it makes gdk-pixbuf scale each
+ * frame as it decodes, instead of building full-resolution frames we would
+ * immediately throw away.
  */
+function loadScaledAnimation(path, maxW, maxH) {
+    const loader = GdkPixbuf.PixbufLoader.new();
+    loader.connect('size-prepared', (self, width, height) => {
+        const scale = Math.min(maxW / width, maxH / height, 1);
+        self.set_size(
+            Math.max(1, Math.round(width * scale)),
+            Math.max(1, Math.round(height * scale)));
+    });
+
+    try {
+        const [ok, contents] = GLib.file_get_contents(path);
+        if (!ok) {
+            loader.close();
+            return null;
+        }
+        loader.write(contents);
+        loader.close();
+    } catch (e) {
+        try {
+            loader.close();
+        } catch {
+            // already closed
+        }
+        if (!warnedPaths.has(path)) {
+            warnedPaths.add(path);
+            console.warn(`winclip: cannot animate ${path}`, e);
+        }
+        return null;
+    }
+
+    const animation = loader.get_animation();
+    if (!animation || animation.is_static_image())
+        return null;
+    return animation;
+}
+
+/* Only a handful play at once, and whatever the pointer is over always wins a
+ * slot, so the one you are looking at moves. */
 class Ticker {
     constructor() {
         this._players = new Set();
@@ -91,8 +142,11 @@ class Ticker {
             const victim = [...this._players].find(p => !p.hovered);
             if (!victim)
                 return;
-            this._players.delete(victim);
+            this._release(victim);
         }
+        if (!this._load(player))
+            return;
+
         this._players.add(player);
         if (!this._source) {
             this._source = GLib.timeout_add(GLib.PRIORITY_DEFAULT_IDLE, TICK_MS, () => {
@@ -106,6 +160,33 @@ class Ticker {
         }
     }
 
+    /* Decoding happens here rather than when the thumbnail is built, so a tab
+     * full of GIFs only decodes the few that are actually playing. */
+    _load(player) {
+        if (player.iter)
+            return true;
+        if (player.failed)
+            return false;
+
+        const animation = loadScaledAnimation(player.path, player.maxW, player.maxH);
+        if (!animation) {
+            player.failed = true;
+            return false;
+        }
+        player.animation = animation;
+        player.iter = animation.get_iter(null);
+        player.frames = 0;
+        return true;
+    }
+
+    /** Stops a player and lets its decoded frames go. */
+    _release(player) {
+        this._players.delete(player);
+        player.iter = null;
+        player.animation = null;
+        player.frames = 0;
+    }
+
     setHovered(player, hovered) {
         player.hovered = hovered;
         if (hovered)
@@ -113,11 +194,14 @@ class Ticker {
     }
 
     remove(player) {
-        this._players.delete(player);
+        this._release(player);
     }
 
     stop() {
+        for (const player of [...this._players])
+            this._release(player);
         this._players.clear();
+        warnedPaths.clear();
         if (this._source) {
             GLib.source_remove(this._source);
             this._source = 0;
@@ -130,6 +214,14 @@ class Ticker {
             try {
                 if (now < player.dueAt)
                     continue;
+
+                // Frames are retained as the iterator walks forward, so a very
+                // long GIF restarts instead of accumulating without bound.
+                if (++player.frames > MAX_FRAMES) {
+                    player.iter = player.animation.get_iter(null);
+                    player.frames = 0;
+                }
+
                 player.iter.advance(null);
                 const frame = scaleToFit(player.iter.get_pixbuf(), player.maxW, player.maxH);
                 const content = pixbufToContent(frame);
@@ -139,7 +231,7 @@ class Ticker {
                 player.dueAt = now + (delay > 0 ? delay : 100);
             } catch (e) {
                 console.error('winclip: gif playback failed', e);
-                this._players.delete(player);
+                this._release(player);
             }
         }
     }
@@ -149,8 +241,6 @@ const ticker = new Ticker();
 
 export function stopAllAnimations() {
     ticker.stop();
-    // Module-scope state must not survive disable().
-    warnedPaths.clear();
 }
 
 /** How many GIFs are currently animating; useful when diagnosing load. */
@@ -196,20 +286,21 @@ export function createImageActor(path, maxW, maxH, {animate = true} = {}) {
     return actor;
 }
 
+/* Registers a player without decoding anything: the still frame is already on
+ * screen, and the animation is built only if the ticker gives it a slot. */
 function attachAnimation(actor, path, maxW, maxH) {
-    let anim, iter;
-    try {
-        anim = GdkPixbuf.PixbufAnimation.new_from_file(path);
-        if (anim.is_static_image())
-            return;
-        iter = anim.get_iter(null);
-    } catch (e) {
-        // Not fatal: the still frame is already on screen.
-        console.error(`winclip: cannot animate ${path}`, e);
-        return;
-    }
-
-    const player = {actor, iter, maxW, maxH, dueAt: 0, hovered: false};
+    const player = {
+        actor,
+        path,
+        maxW,
+        maxH,
+        animation: null,
+        iter: null,
+        frames: 0,
+        failed: false,
+        dueAt: 0,
+        hovered: false,
+    };
     actor._winclipPlayer = player;
     ticker.request(player);
     actor.connect('destroy', () => ticker.remove(player));
