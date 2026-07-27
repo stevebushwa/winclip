@@ -1,5 +1,6 @@
 UUID    = winclip@stevebushwa.github.io
 EXTRAS  = store.js clipboardMonitor.js overlay.js tabs.js imageUtil.js \
+          gifSearch.js clipboardSource.js \
           paste.js gifScanner.js emojiData.js LICENSE
 ZIP     = dist/$(UUID).shell-extension.zip
 

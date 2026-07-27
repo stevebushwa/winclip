@@ -84,6 +84,63 @@
       <summary>Stop after finding this many GIFs</summary>
     </key>
 
+    <key name="gif-paste-format" type="s">
+      <choices>
+        <choice value="png"/>
+        <choice value="gif"/>
+        <choice value="uri"/>
+      </choices>
+      <default>'png'</default>
+      <summary>How a GIF is placed on the clipboard</summary>
+      <description>
+        GNOME publishes one clipboard type per copy, so a GIF has to pick one.
+        "png" converts the first frame, which pastes into anything but loses
+        the animation. "gif" keeps it moving but only works in applications
+        that request image/gif, which is few. "uri" offers the file itself,
+        which chat clients and file managers attach as an animated GIF.
+      </description>
+    </key>
+
+    <key name="gif-search-provider" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="tenor"/>
+        <choice value="giphy"/>
+      </choices>
+      <default>'none'</default>
+      <summary>Online GIF search service</summary>
+      <description>
+        Off by default. When set, search terms typed in the GIF tab are sent to
+        the chosen service. Requires your own API key.
+      </description>
+    </key>
+
+    <key name="gif-tenor-key" type="s">
+      <default>''</default>
+      <summary>Your Tenor API key</summary>
+    </key>
+
+    <key name="gif-giphy-key" type="s">
+      <default>''</default>
+      <summary>Your Giphy API key</summary>
+    </key>
+
+    <key name="gif-search-limit" type="i">
+      <default>24</default>
+      <range min="8" max="50"/>
+      <summary>How many results to request</summary>
+    </key>
+
+    <key name="gif-search-rating" type="s">
+      <choices>
+        <choice value="strict"/>
+        <choice value="moderate"/>
+        <choice value="off"/>
+      </choices>
+      <default>'moderate'</default>
+      <summary>Content filter applied to search results</summary>
+    </key>
+
     <key name="skin-tone" type="i">
       <default>0</default>
       <range min="0" max="5"/>

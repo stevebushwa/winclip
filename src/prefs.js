@@ -13,6 +13,13 @@ import {describeFolder} from './gifScanner.js';
 
 const SKIN_TONES = ['Default', 'Light', 'Medium-light', 'Medium', 'Medium-dark', 'Dark'];
 const DEFAULT_FOLDERS = ['@DOWNLOAD', '@PICTURES'];
+const GIF_FORMATS = [
+    ['png', 'Still image (PNG)', 'Pastes into anything, but not animated'],
+    ['gif', 'Animated GIF', 'Stays animated, but only some apps accept it'],
+    ['uri', 'The file itself', 'Chat apps and file managers attach the animation'],
+];
+const SEARCH_PROVIDERS = [['none', 'Off'], ['tenor', 'Tenor'], ['giphy', 'Giphy']];
+const SEARCH_RATINGS = [['strict', 'Strict'], ['moderate', 'Moderate'], ['off', 'Off']];
 
 export default class WinClipPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -115,6 +122,30 @@ export default class WinClipPreferences extends ExtensionPreferences {
 
         rebuild();
         page.add(extra);
+
+        const paste = new Adw.PreferencesGroup({
+            title: 'Pasting GIFs',
+            description: 'GNOME publishes a single clipboard type per copy, so a GIF ' +
+                'has to be offered as one thing. Most applications only ask for ' +
+                'image/png, which is why an animated GIF can appear to paste nowhere.',
+        });
+        const format = new Adw.ComboRow({
+            title: 'Copy GIFs as',
+            model: Gtk.StringList.new(GIF_FORMATS.map(f => f[1])),
+            subtitle: GIF_FORMATS.find(
+                f => f[0] === settings.get_string('gif-paste-format'))?.[2] ?? '',
+            selected: Math.max(0, GIF_FORMATS.findIndex(
+                f => f[0] === settings.get_string('gif-paste-format'))),
+        });
+        format.connect('notify::selected', () => {
+            const choice = GIF_FORMATS[format.selected];
+            settings.set_string('gif-paste-format', choice[0]);
+            format.subtitle = choice[2];
+        });
+        paste.add(format);
+        page.add(paste);
+
+        page.add(this._searchGroup(settings));
 
         const limits = new Adw.PreferencesGroup({
             title: 'Limits',
@@ -280,6 +311,83 @@ export default class WinClipPreferences extends ExtensionPreferences {
         page.add(behaviour);
 
         return page;
+    }
+
+    // --------------------------------------------------------- online search
+
+    _searchGroup(settings) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Online search',
+            description: 'Off by default. When enabled, what you type in the GIF tab ' +
+                'is sent to the service you choose. Both need an API key of your own — ' +
+                'none is bundled, because a key shipped inside an open-source extension ' +
+                'would be extracted and revoked.',
+        });
+
+        const provider = new Adw.ComboRow({
+            title: 'Service',
+            model: Gtk.StringList.new(SEARCH_PROVIDERS.map(p => p[1])),
+            selected: Math.max(0, SEARCH_PROVIDERS.findIndex(
+                p => p[0] === settings.get_string('gif-search-provider'))),
+        });
+        provider.connect('notify::selected', () => settings.set_string(
+            'gif-search-provider', SEARCH_PROVIDERS[provider.selected][0]));
+        group.add(provider);
+
+        const tenorKey = new Adw.PasswordEntryRow({title: 'Tenor API key'});
+        settings.bind('gif-tenor-key', tenorKey, 'text', Gio.SettingsBindFlags.DEFAULT);
+        group.add(tenorKey);
+
+        const giphyKey = new Adw.PasswordEntryRow({title: 'Giphy API key'});
+        settings.bind('gif-giphy-key', giphyKey, 'text', Gio.SettingsBindFlags.DEFAULT);
+        group.add(giphyKey);
+
+        // Only show the key that matters for the current choice.
+        const syncKeyRows = () => {
+            const id = SEARCH_PROVIDERS[provider.selected][0];
+            tenorKey.visible = id === 'tenor';
+            giphyKey.visible = id === 'giphy';
+        };
+        provider.connect('notify::selected', syncKeyRows);
+        syncKeyRows();
+
+        const rating = new Adw.ComboRow({
+            title: 'Content filter',
+            subtitle: 'Applied by the service to its results',
+            model: Gtk.StringList.new(SEARCH_RATINGS.map(r => r[1])),
+            selected: Math.max(0, SEARCH_RATINGS.findIndex(
+                r => r[0] === settings.get_string('gif-search-rating'))),
+        });
+        rating.connect('notify::selected', () => settings.set_string(
+            'gif-search-rating', SEARCH_RATINGS[rating.selected][0]));
+        group.add(rating);
+
+        const limit = new Adw.SpinRow({
+            title: 'Results per search',
+            adjustment: new Gtk.Adjustment({lower: 8, upper: 50, step_increment: 2}),
+        });
+        settings.bind('gif-search-limit', limit, 'value', Gio.SettingsBindFlags.DEFAULT);
+        group.add(limit);
+
+        const help = new Adw.ActionRow({
+            title: 'Where to get a key',
+            subtitle: 'Tenor keys come from Google Cloud; Giphy from their developer portal',
+        });
+        const openTenor = new Gtk.LinkButton({
+            label: 'Tenor',
+            uri: 'https://developers.google.com/tenor/guides/quickstart',
+            valign: Gtk.Align.CENTER,
+        });
+        const openGiphy = new Gtk.LinkButton({
+            label: 'Giphy',
+            uri: 'https://developers.giphy.com/docs/api/',
+            valign: Gtk.Align.CENTER,
+        });
+        help.add_suffix(openTenor);
+        help.add_suffix(openGiphy);
+        group.add(help);
+
+        return group;
     }
 
     // -------------------------------------------------------------- shortcut

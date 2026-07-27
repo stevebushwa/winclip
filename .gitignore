@@ -1,3 +1,4 @@
 dist/
 *.zip
 migrate-local-install.sh
+src/schemas/gschemas.compiled

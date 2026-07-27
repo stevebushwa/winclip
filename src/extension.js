@@ -51,6 +51,8 @@ export default class WinClipExtension extends Extension {
             () => this._overlay.toggle());
     }
 
+
+
     disable() {
         Main.wm.removeKeybinding('toggle-overlay');
 

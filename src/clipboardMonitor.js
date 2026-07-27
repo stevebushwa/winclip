@@ -13,6 +13,8 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import St from 'gi://St';
 
+import {imageFlavour} from './clipboardSource.js';
+
 // Most specific first: a GIF offered alongside a PNG is still a GIF.
 const IMAGE_MIMES = ['image/gif', 'image/webp', 'image/png', 'image/jpeg', 'image/bmp'];
 const TEXT_MIMES = ['text/plain;charset=utf-8', 'text/plain', 'UTF8_STRING', 'STRING'];
@@ -148,5 +150,23 @@ export class ClipboardMonitor {
         this.withSelfWrite(() => {
             this._clipboard.set_content(St.ClipboardType.CLIPBOARD, mime, bytes);
         });
+    }
+
+    /**
+     * Puts an image file on the clipboard in whichever single flavour is most
+     * likely to be accepted. Preferred over setImage, which publishes the
+     * file's own type verbatim — an image/gif offer pastes into almost
+     * nothing, because applications ask for image/png.
+     */
+    setImageFile(path, mime) {
+        const flavour = imageFlavour(
+            path, mime, this._settings.get_string('gif-paste-format'));
+        if (!flavour)
+            return false;
+        this.withSelfWrite(() => {
+            this._clipboard.set_content(
+                St.ClipboardType.CLIPBOARD, flavour.mime, flavour.bytes);
+        });
+        return true;
     }
 }

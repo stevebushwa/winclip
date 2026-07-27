@@ -78,7 +78,40 @@ treat it as sensitive.
   "Copy Image" still arrive as images.
 - **History** — entry cap plus a total disk budget for stored images, since a
   hundred screenshots at the per-image limit would otherwise be gigabytes.
-- **GIFs** — which folders to scan, how deep, and how many results to list.
+- **GIFs** — which folders to scan, how deep, how many results to list, and
+  how a GIF is placed on the clipboard.
+
+### Pasting GIFs
+
+GNOME publishes a single clipboard type per copy, and nearly every application
+asks for `image/png`. A GIF offered as `image/gif` therefore pastes into almost
+nothing. Offering several types at once is not possible from an extension:
+`St.Clipboard` takes one type, and owning the selection with a custom
+`MetaSelectionSource` fails because GJS cannot implement a vfunc that takes a
+callback, which `read_async` does.
+
+So **Copy GIFs as** picks one:
+
+| Setting | Behaviour |
+| --- | --- |
+| Still image (PNG) — default | First frame, converted. Pastes anywhere; not animated. |
+| Animated GIF | Stays animated, but only apps that request `image/gif` see it. |
+| The file itself | A `file://` URI. Chat clients and file managers attach the animated file. |
+
+### Online search
+
+Off by default. Choosing Tenor or Giphy in preferences and entering **your own
+API key** adds their results to the GIF tab. No key is bundled — one shipped
+inside an open-source extension would be extracted and revoked — so keys come
+from [Tenor](https://developers.google.com/tenor/guides/quickstart) or
+[Giphy](https://developers.giphy.com/docs/api/).
+
+While enabled, what you type in the GIF tab is sent to the service you chose.
+Nothing contacts the network until a provider is selected, a key entered, and
+something typed. Results are fetched as small previews; the full-size file is
+only downloaded when you choose or pin one, and previews are cached in
+`~/.local/share/winclip/cache/`, which is emptied when the extension is
+disabled.
 
 Scanning is asynchronous, capped by depth and result count, and cached, so it
 does not stall the shell on large folders. At most 12 GIFs animate at once;

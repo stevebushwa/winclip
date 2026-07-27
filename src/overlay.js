@@ -314,14 +314,30 @@ export class Overlay {
         // Close first: the grab has to be gone before the target window can
         // take focus and receive the synthetic paste.
         this.close();
+
+        let result;
         try {
-            cell.activate();
+            result = cell.activate();
         } catch (e) {
             console.error('winclip: could not apply clipboard entry', e);
             return;
         }
-        if (this.settings.get_boolean('auto-paste'))
-            sendPaste(this.settings.get_int('paste-delay-ms'));
+
+        const paste = () => {
+            if (this.settings.get_boolean('auto-paste'))
+                sendPaste(this.settings.get_int('paste-delay-ms'));
+        };
+
+        // An entry that has to be downloaded first hands back a promise, so
+        // the paste waits for the clipboard to actually hold the content.
+        if (result && typeof result.then === 'function') {
+            result.then(ok => {
+                if (ok)
+                    paste();
+            }).catch(e => console.error('winclip: could not apply entry', e));
+            return;
+        }
+        paste();
     }
 
     // ------------------------------------------------------------- keyboard

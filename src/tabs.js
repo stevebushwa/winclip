@@ -18,9 +18,10 @@ import Gio from 'gi://Gio';
 import St from 'gi://St';
 
 import {TYPE_IMAGE, TYPE_TEXT} from './store.js';
-import {createImageActor, readFileBytes, setThumbHovered} from './imageUtil.js';
+import {createImageActor, setThumbHovered} from './imageUtil.js';
 import {EMOJI, EMOJI_GROUPS} from './emojiData.js';
 import {GifScanner} from './gifScanner.js';
+import {GifSearch} from './gifSearch.js';
 
 const TEXT_PREVIEW_CHARS = 220;
 const THUMB_W = 260;
@@ -222,12 +223,9 @@ export class ClipboardTab {
             this._overlay.monitor.setText(item.text);
             return;
         }
-        try {
-            const bytes = readFileBytes(this._overlay.store.blobPath(item));
-            this._overlay.monitor.setImage(bytes, item.mime || 'image/png');
-        } catch (e) {
-            console.error('winclip: could not put image on the clipboard', e);
-        }
+        const path = this._overlay.store.blobPath(item);
+        if (!this._overlay.monitor.setImageFile(path, item.mime || 'image/png'))
+            console.error(`winclip: could not put ${path} on the clipboard`);
     }
 }
 
@@ -305,6 +303,7 @@ export class GifTab {
         this.cells = [];
         this.providers = [new LocalGifProvider(overlay.store)];
         this._scanner = new GifScanner(overlay.settings);
+        this._search = new GifSearch(overlay.settings);
     }
 
     get title() {
@@ -313,6 +312,7 @@ export class GifTab {
 
     destroy() {
         this._scanner.destroy();
+        this._search.destroy();
     }
 
     refresh(query) {
@@ -334,24 +334,50 @@ export class GifTab {
             .filter(r => !known.has(r.path) && matches(r.name, q))
             .map(r => ({path: r.path, pinned: false, source: 'scan'}));
 
+        // Online search, if the user has turned one on and typed something.
+        // Nothing here touches the network otherwise.
+        const redraw = () => {
+            if (this._overlay.isOpen && this._overlay.activeTab === this)
+                this._overlay.refresh();
+        };
+        this._search.maybeSearch(query, redraw);
+        const online = this._search.results.map(r => ({
+            path: r.path, pinned: false, source: 'online', online: r,
+        }));
+
         const pinned = local.filter(r => r.pinned);
         const clipboard = local.filter(r => !r.pinned);
 
-        if (!pinned.length && !clipboard.length && !scanned.length) {
-            this._box.add_child(emptyNotice(q
-                ? 'No GIFs match that.'
-                : this._scanner.scanning
-                    ? 'Looking for GIFs on this computer…'
-                    : 'Copy a GIF, drop files into ~/.local/share/winclip/gifs,\nor add a folder to scan in preferences.'));
+        if (!pinned.length && !clipboard.length && !scanned.length && !online.length) {
+            this._box.add_child(emptyNotice(this._emptyText(q)));
             return;
         }
 
         this._addSection('Favourites', pinned);
         this._addSection('From clipboard', clipboard);
         this._addSection('On this computer', scanned);
+        this._addSection(this._search.label, online);
 
         if (this._scanner.scanning)
-            this._box.add_child(emptyNotice('Still searching…'));
+            this._box.add_child(emptyNotice('Still looking on this computer…'));
+        if (this._search.searching)
+            this._box.add_child(emptyNotice(`Searching ${this._search.label}…`));
+        else if (this._search.error)
+            this._box.add_child(emptyNotice(`${this._search.label}: ${this._search.error}`));
+    }
+
+    _emptyText(q) {
+        if (this._search.searching)
+            return `Searching ${this._search.label}…`;
+        if (this._search.error)
+            return `${this._search.label}: ${this._search.error}`;
+        if (q)
+            return this._search.enabled
+                ? 'No GIFs match that.'
+                : 'No GIFs match that.\nTurn on online search in preferences to look further.';
+        if (this._scanner.scanning)
+            return 'Looking for GIFs on this computer…';
+        return 'Copy a GIF, drop files into ~/.local/share/winclip/gifs,\nor add a folder to scan in preferences.';
     }
 
     _addSection(title, results) {
@@ -388,9 +414,12 @@ export class GifTab {
                     store.togglePin(result.item.id);
                 else if (result.source === 'scan')
                     store.togglePinPath(result.path);
+                else if (result.source === 'online')
+                    return this._pinOnline(result);
                 // Files in the favourites folder are already favourites; the
                 // way to remove one is to move the file out.
                 this._overlay.refresh();
+                return undefined;
             },
             remove: () => {
                 // Only ever forgets our own captures — never deletes a file
@@ -406,11 +435,45 @@ export class GifTab {
     }
 
     _apply(result) {
-        try {
-            this._overlay.monitor.setImage(readFileBytes(result.path), 'image/gif');
-        } catch (e) {
-            console.error('winclip: could not put GIF on the clipboard', e);
+        // Search results are only previews on disk; fetch the full-size file
+        // before it goes anywhere. The promise lets the overlay hold the
+        // synthetic paste back until the clipboard actually holds the GIF.
+        if (result.source === 'online') {
+            return new Promise(resolve => {
+                this._search.fetchFull(result.online, path => {
+                    if (!path) {
+                        console.warn('winclip: could not download the full-size GIF');
+                        resolve(false);
+                        return;
+                    }
+                    resolve(this._toClipboard(path));
+                });
+            });
         }
+        return this._toClipboard(result.path);
+    }
+
+    _toClipboard(path) {
+        // Offers image/gif, a PNG rendering and a file URI together, so the
+        // paste lands whether the target wants the animation, a still, or the
+        // file itself.
+        if (this._overlay.monitor.setImageFile(path, 'image/gif'))
+            return true;
+        console.error(`winclip: could not put ${path} on the clipboard`);
+        return false;
+    }
+
+    /* Pinning a search result keeps it: the cache is wiped on disable, so the
+     * full-size file is copied into the favourites folder instead. */
+    _pinOnline(result) {
+        return new Promise(resolve => {
+            this._search.fetchFull(result.online, path => {
+                if (path)
+                    this._search.saveAsFavourite(result.online, path);
+                this._overlay.refresh();
+                resolve(!!path);
+            });
+        });
     }
 }
 
