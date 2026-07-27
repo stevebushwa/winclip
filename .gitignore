@@ -1,0 +1,3 @@
+dist/
+*.zip
+migrate-local-install.sh

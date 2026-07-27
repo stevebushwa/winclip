@@ -1,0 +1,10 @@
+{
+  "uuid": "winclip@stevebushwa.github.io",
+  "name": "WinClip",
+  "description": "A Windows-style clipboard manager. Super+V opens an overlay at the pointer, over whatever window you are in.\n\n• Clipboard — text and image history, with pinned entries kept at the top\n• GIF — GIFs you have copied, favourites, and animated GIFs found in your Downloads and Pictures folders\n• Emoji — searchable by name and keyword, with pins, recents and a skin tone setting\n\nChoosing an entry pastes it straight into the window underneath. Requires Wayland.",
+  "shell-version": [
+    "50"
+  ],
+  "url": "https://github.com/stevebushwa/winclip",
+  "settings-schema": "org.gnome.shell.extensions.winclip"
+}

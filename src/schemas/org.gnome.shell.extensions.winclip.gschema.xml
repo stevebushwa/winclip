@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="winclip">
+  <schema id="org.gnome.shell.extensions.winclip"
+          path="/org/gnome/shell/extensions/winclip/">
+
+    <key name="toggle-overlay" type="as">
+      <default><![CDATA[['<Super>v']]]></default>
+      <summary>Open the clipboard overlay</summary>
+    </key>
+
+    <key name="history-size" type="i">
+      <default>100</default>
+      <range min="5" max="1000"/>
+      <summary>How many unpinned entries to keep</summary>
+    </key>
+
+    <key name="capture-images" type="b">
+      <default>true</default>
+      <summary>Store images copied to the clipboard</summary>
+    </key>
+
+    <key name="prefer-text-when-both" type="b">
+      <default>true</default>
+      <summary>Prefer text when a copy offers both text and an image</summary>
+      <description>
+        Rich-text copies from office suites advertise an image/png flavour as
+        well as plain text. With this on, those are stored as text; copies that
+        offer only image flavours (screenshots, "Copy Image") are still stored
+        as images.
+      </description>
+    </key>
+
+    <key name="max-image-mb" type="i">
+      <default>16</default>
+      <range min="1" max="256"/>
+      <summary>Skip clipboard images larger than this many megabytes</summary>
+    </key>
+
+    <key name="max-blob-mb" type="i">
+      <default>200</default>
+      <range min="16" max="4096"/>
+      <summary>Total disk budget for stored images</summary>
+      <description>
+        Oldest unpinned images are dropped once the images WinClip has stored
+        exceed this. Pinned images, and entries that merely point at your own
+        files, are not counted.
+      </description>
+    </key>
+
+    <key name="auto-paste" type="b">
+      <default>true</default>
+      <summary>Paste immediately after picking an item</summary>
+      <description>
+        Synthesises Ctrl+V into the window that had focus, like the Windows
+        clipboard. Turn off to only place the item on the clipboard.
+      </description>
+    </key>
+
+    <key name="paste-delay-ms" type="i">
+      <default>90</default>
+      <range min="0" max="1000"/>
+      <summary>Delay before the synthetic paste</summary>
+    </key>
+
+    <key name="gif-scan-folders" type="as">
+      <default>['@DOWNLOAD','@PICTURES']</default>
+      <summary>Folders searched for GIFs already on this computer</summary>
+      <description>
+        Accepts absolute paths, ~/ paths, or the tokens @DOWNLOAD, @PICTURES,
+        @DOCUMENTS, @DESKTOP, @VIDEOS and @MUSIC, which follow the XDG user
+        directories. An empty list turns scanning off.
+      </description>
+    </key>
+
+    <key name="gif-scan-depth" type="i">
+      <default>3</default>
+      <range min="1" max="8"/>
+      <summary>How many directory levels down to search</summary>
+    </key>
+
+    <key name="gif-scan-max" type="i">
+      <default>400</default>
+      <range min="20" max="5000"/>
+      <summary>Stop after finding this many GIFs</summary>
+    </key>
+
+    <key name="skin-tone" type="i">
+      <default>0</default>
+      <range min="0" max="5"/>
+      <summary>Emoji skin tone (0 = default)</summary>
+    </key>
+
+    <key name="panel-width" type="i">
+      <default>420</default>
+      <range min="280" max="900"/>
+      <summary>Overlay width in pixels</summary>
+    </key>
+
+    <key name="panel-height" type="i">
+      <default>520</default>
+      <range min="300" max="1200"/>
+      <summary>Overlay height in pixels</summary>
+    </key>
+
+    <key name="last-tab" type="s">
+      <default>'clipboard'</default>
+      <summary>Tab to reopen on</summary>
+    </key>
+
+    <key name="remember-tab" type="b">
+      <default>false</default>
+      <summary>Reopen on the last used tab instead of Clipboard</summary>
+    </key>
+
+    <key name="emoji-recent" type="as">
+      <default>[]</default>
+      <summary>Recently used emoji</summary>
+    </key>
+
+    <key name="emoji-pinned" type="as">
+      <default>[]</default>
+      <summary>Pinned emoji</summary>
+    </key>
+
+  </schema>
+</schemalist>
