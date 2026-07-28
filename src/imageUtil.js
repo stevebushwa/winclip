@@ -131,6 +131,7 @@ function loadScaledAnimation(path, maxW, maxH, callback) {
 class Ticker {
     constructor() {
         this._players = new Set();
+        this._loading = 0;
         this._source = 0;
     }
 
@@ -138,16 +139,26 @@ class Ticker {
         return this._players.size;
     }
 
+    /* Decodes in flight count against the cap as well as decodes already
+     * playing. Without that, a tab of GIFs would fire every decode at once —
+     * they are all requested before any of them has finished loading, so the
+     * playing count is still zero and the cap never bites. That is precisely
+     * the condition that exhausted memory in the first place.
+     */
+    get _busy() {
+        return this._players.size + this._loading;
+    }
+
     /** Plays only if there is a free slot. */
     request(player) {
-        if (this._players.size < MAX_ACTIVE)
+        if (this._busy < MAX_ACTIVE)
             this.activate(player);
     }
 
     activate(player) {
         if (this._players.has(player) || player.failed || player.loading || player.dead)
             return;
-        if (this._players.size >= MAX_ACTIVE) {
+        if (this._busy >= MAX_ACTIVE) {
             const victim = [...this._players].find(p => !p.hovered);
             if (!victim)
                 return;
@@ -161,8 +172,10 @@ class Ticker {
         /* Decoding happens here rather than when the thumbnail is built, so a
          * tab full of GIFs only decodes the few that actually play. */
         player.loading = true;
+        this._loading++;
         loadScaledAnimation(player.path, player.maxW, player.maxH, animation => {
             player.loading = false;
+            this._loading--;
             if (player.dead)
                 return;
             if (!animation) {
@@ -216,6 +229,7 @@ class Ticker {
         for (const player of [...this._players])
             this._release(player);
         this._players.clear();
+        this._loading = 0;
         warnedPaths.clear();
         if (this._source) {
             GLib.source_remove(this._source);
