@@ -33,25 +33,49 @@ paste be synthesised through a Clutter virtual input device rather than
 
 ## Requirements
 
-GNOME Shell 50 on Wayland.
+GNOME Shell 50 on Wayland. The installer also needs `curl` and `unzip`, both
+of which Ubuntu has by default.
 
 ## Install
 
-From [extensions.gnome.org](https://extensions.gnome.org), or with the
-installer, which needs no other files and fetches the latest release itself:
+**With the installer.** One file, nothing else beside it — it fetches the
+latest release itself:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/stevebushwa/winclip/main/install-winclip.sh
 bash install-winclip.sh
 ```
 
-Or from a checkout:
+It checks your GNOME version, installs the extension, compiles its schema,
+frees `Super+V` from the message tray (leaving `Super+M` and your other
+shortcuts alone) and enables WinClip alongside your existing extensions. Safe
+to re-run: that is also how you upgrade.
+
+**From extensions.gnome.org.** Search for WinClip and use the toggle, or the
+Extension Manager app.
+
+**From a checkout.**
 
 ```sh
+git clone https://github.com/stevebushwa/winclip.git
+cd winclip
 make install
 ```
 
-Then log out and back in — GNOME only scans for new extensions at startup.
+Whichever route you take, **log out and back in** afterwards. GNOME only scans
+for extensions when the shell starts, and Wayland has no way to restart the
+shell in place, so a new extension cannot appear in a running session.
+
+Then press `Super+V`.
+
+### Uninstall
+
+```sh
+bash install-winclip.sh --uninstall
+```
+
+Removes the extension and leaves your clipboard history in place. The command
+to restore the old tray shortcut is printed at the end.
 
 ## Keys
 
