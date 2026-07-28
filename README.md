@@ -116,8 +116,13 @@ Tenor is not offered: Google stopped issuing keys on 13 January 2026 and shut
 the public API down on 30 June 2026.
 
 Scanning is asynchronous, capped by depth and result count, and cached, so it
-does not stall the shell on large folders. At most 12 GIFs animate at once;
-whichever the pointer is over always gets a slot.
+does not stall the shell on large folders.
+
+**Animate GIFs** (on by default) controls whether previews move. Each playing
+GIF is captured once into a short loop of thumbnail-sized frames and the
+decoder is then dropped, so at most six animate at once and whichever the
+pointer is over always gets a slot. Across a folder of 68 GIFs that costs
+roughly 29 MB; turned off, still frames cost about 18 MB.
 
 WinClip never deletes files it did not create. Unpinning a GIF found on disk
 forgets the reference and leaves the file alone.

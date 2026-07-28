@@ -84,6 +84,16 @@
       <summary>Stop after finding this many GIFs</summary>
     </key>
 
+    <key name="gif-animate" type="b">
+      <default>true</default>
+      <summary>Animate GIF previews</summary>
+      <description>
+        Each playing GIF is captured once into a short loop of thumbnail-sized
+        frames, costing a few megabytes. Turn this off to show a single still
+        frame instead, which is cheaper again.
+      </description>
+    </key>
+
     <key name="gif-paste-format" type="s">
       <choices>
         <choice value="png"/>

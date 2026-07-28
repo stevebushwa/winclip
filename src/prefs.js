@@ -123,6 +123,15 @@ export default class WinClipPreferences extends ExtensionPreferences {
         rebuild();
         page.add(extra);
 
+        const previews = new Adw.PreferencesGroup({title: 'Previews'});
+        const animate = new Adw.SwitchRow({
+            title: 'Animate GIFs',
+            subtitle: 'Off shows a single still frame, using less memory',
+        });
+        settings.bind('gif-animate', animate, 'active', Gio.SettingsBindFlags.DEFAULT);
+        previews.add(animate);
+        page.add(previews);
+
         const paste = new Adw.PreferencesGroup({
             title: 'Pasting GIFs',
             description: 'GNOME publishes a single clipboard type per copy, so a GIF ' +

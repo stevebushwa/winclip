@@ -137,7 +137,8 @@ export class ClipboardTab {
 
         if (item.type === TYPE_IMAGE) {
             const path = this._overlay.store.blobPath(item);
-            const thumb = createImageActor(path, THUMB_W, THUMB_H);
+            const thumb = createImageActor(path, THUMB_W, THUMB_H,
+                {animate: this._overlay.settings.get_boolean('gif-animate')});
             if (thumb) {
                 body.add_child(thumb);
             } else {
@@ -448,7 +449,8 @@ export class GifTab {
             width: GIF_CELL_W - 8,
             height: GIF_CELL_H,
         });
-        const thumb = createImageActor(result.path, GIF_CELL_W - 16, GIF_CELL_H - 8);
+        const thumb = createImageActor(result.path, GIF_CELL_W - 16, GIF_CELL_H - 8,
+            {animate: this._overlay.settings.get_boolean('gif-animate')});
         if (thumb) {
             button.set_child(thumb);
             // Whatever the pointer is over gets an animation slot.
