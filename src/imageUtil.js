@@ -13,9 +13,11 @@
  *      size-prepared yields the same animation for a few MB.
  *   2. Decode lazily, and only for what is playing. Building an animation for
  *      every visible thumbnail is what exhausted memory.
- *   3. Bound the frames retained. Frames materialise as the iterator advances
- *      and are kept, so long animations restart at a cap rather than
- *      accumulating.
+ *   3. Capture a short loop, then drop the decoder. The iterator is driven by
+ *      wall-clock time, so playing straight from it keeps decoding new frames
+ *      that the animation then holds on to, and every tick allocated a fresh
+ *      texture besides — about 43 MB per GIF. A fixed number of frames is
+ *      captured once and replayed as ready-made textures.
  */
 
 import Clutter from 'gi://Clutter';
@@ -27,7 +29,7 @@ import St from 'gi://St';
 
 const TICK_MS = 40;
 const MAX_ACTIVE = 6;    // animations playing at once
-const MAX_FRAMES = 60;   // frames cycled before a long GIF is restarted
+const MAX_FRAMES = 24;   // frames captured per GIF, then the source is dropped
 
 // Files we have already complained about, so a broken image does not fill the
 // journal. Cleared on disable along with the rest of this module's state.
@@ -164,7 +166,7 @@ class Ticker {
                 return;
             this._release(victim);
         }
-        if (player.iter) {
+        if (player.iter || player.cache.length) {
             this._start(player);
             return;
         }
@@ -184,7 +186,8 @@ class Ticker {
             }
             player.animation = animation;
             player.iter = animation.get_iter(null);
-            player.frames = 0;
+            player.cache = [];
+            player.index = 0;
             // The tab may have moved on while we were reading from disk.
             if (this._players.size < MAX_ACTIVE || player.hovered)
                 this._start(player);
@@ -210,7 +213,8 @@ class Ticker {
         this._players.delete(player);
         player.iter = null;
         player.animation = null;
-        player.frames = 0;
+        player.cache = [];
+        player.index = 0;
     }
 
     setHovered(player, hovered) {
@@ -237,6 +241,14 @@ class Ticker {
         }
     }
 
+    /* Each GIF is captured once into a short loop of ready-made textures, and
+     * the decoder is then thrown away. Playing straight from the animation
+     * instead cost about 43 MB per GIF: the iterator is driven by wall-clock
+     * time, so it keeps decoding new frames, the animation retains every one
+     * of them, and each tick also allocated a fresh texture. Capturing a fixed
+     * number of frames bounds both, and replaying them afterwards costs
+     * nothing but a content swap.
+     */
     _tick() {
         const now = GLib.get_monotonic_time() / 1000;
         for (const player of [...this._players]) {
@@ -244,20 +256,35 @@ class Ticker {
                 if (now < player.dueAt)
                     continue;
 
-                // Frames are retained as the iterator walks forward, so a very
-                // long GIF restarts instead of accumulating without bound.
-                if (++player.frames > MAX_FRAMES) {
-                    player.iter = player.animation.get_iter(null);
-                    player.frames = 0;
+                if (player.iter) {
+                    const frame = scaleToFit(
+                        player.iter.get_pixbuf(), player.maxW, player.maxH);
+                    const content = pixbufToContent(frame);
+                    const delay = player.iter.get_delay_time();
+                    const wait = delay > 0 ? delay : 100;
+
+                    player.cache.push({content, delay: wait});
+                    player.iter.advance(null);
+
+                    if (player.cache.length >= MAX_FRAMES) {
+                        // Captured enough: release the decoder and every frame
+                        // it was holding on to.
+                        player.iter = null;
+                        player.animation = null;
+                    }
+
+                    if (content)
+                        player.actor.set_content(content);
+                    player.dueAt = now + wait;
+                    continue;
                 }
 
-                player.iter.advance(null);
-                const frame = scaleToFit(player.iter.get_pixbuf(), player.maxW, player.maxH);
-                const content = pixbufToContent(frame);
-                if (content)
-                    player.actor.set_content(content);
-                const delay = player.iter.get_delay_time();
-                player.dueAt = now + (delay > 0 ? delay : 100);
+                // Replaying the captured loop: no decode, no allocation.
+                const frame = player.cache[player.index];
+                player.index = (player.index + 1) % player.cache.length;
+                if (frame.content)
+                    player.actor.set_content(frame.content);
+                player.dueAt = now + frame.delay;
             } catch (e) {
                 console.error('winclip: gif playback failed', e);
                 this._release(player);
@@ -337,7 +364,8 @@ function attachAnimation(actor, path, maxW, maxH) {
         maxH,
         animation: null,
         iter: null,
-        frames: 0,
+        cache: [],
+        index: 0,
         failed: false,
         loading: false,
         dead: false,
