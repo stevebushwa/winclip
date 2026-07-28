@@ -37,7 +37,15 @@ GNOME Shell 50 on Wayland.
 
 ## Install
 
-From [extensions.gnome.org](https://extensions.gnome.org), or from source:
+From [extensions.gnome.org](https://extensions.gnome.org), or with the
+installer, which needs no other files and fetches the latest release itself:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/stevebushwa/winclip/main/install.sh
+bash install.sh
+```
+
+Or from a checkout:
 
 ```sh
 make install
