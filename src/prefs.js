@@ -14,9 +14,9 @@ import {describeFolder} from './gifScanner.js';
 const SKIN_TONES = ['Default', 'Light', 'Medium-light', 'Medium', 'Medium-dark', 'Dark'];
 const DEFAULT_FOLDERS = ['@DOWNLOAD', '@PICTURES'];
 const GIF_FORMATS = [
+    ['uri', 'The file itself', 'Chat apps attach the animation; sandboxed apps may not read it'],
     ['png', 'Still image (PNG)', 'Pastes into anything, but not animated'],
     ['gif', 'Animated GIF', 'Stays animated, but only some apps accept it'],
-    ['uri', 'The file itself', 'Chat apps and file managers attach the animation'],
 ];
 const SEARCH_PROVIDERS = [['none', 'Off'], ['giphy', 'Giphy']];
 const SEARCH_RATINGS = [['strict', 'Strict'], ['moderate', 'Moderate'], ['off', 'Off']];

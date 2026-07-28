@@ -100,14 +100,17 @@
         <choice value="gif"/>
         <choice value="uri"/>
       </choices>
-      <default>'png'</default>
+      <default>'uri'</default>
       <summary>How a GIF is placed on the clipboard</summary>
       <description>
         GNOME publishes one clipboard type per copy, so a GIF has to pick one.
-        "png" converts the first frame, which pastes into anything but loses
-        the animation. "gif" keeps it moving but only works in applications
-        that request image/gif, which is few. "uri" offers the file itself,
-        which chat clients and file managers attach as an animated GIF.
+        "uri" offers the file itself, which chat clients and file managers
+        attach as a working animation; this is the default, since keeping the
+        animation is usually the point. Sandboxed applications may not be able
+        to read the file, in which case nothing is pasted. "png" converts the
+        first frame, which pastes into anything but does not move. "gif" keeps
+        it moving but only works in applications that request image/gif, which
+        is few.
       </description>
     </key>
 

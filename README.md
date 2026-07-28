@@ -94,9 +94,16 @@ So **Copy GIFs as** picks one:
 
 | Setting | Behaviour |
 | --- | --- |
-| Still image (PNG) — default | First frame, converted. Pastes anywhere; not animated. |
+| The file itself — default | A `file://` URI. Chat clients and file managers attach the animated file. |
+| Still image (PNG) | First frame, converted. Pastes anywhere; not animated. |
 | Animated GIF | Stays animated, but only apps that request `image/gif` see it. |
-| The file itself | A `file://` URI. Chat clients and file managers attach the animated file. |
+
+The default keeps the animation, which is usually the point of pasting a GIF.
+The catch is confinement: a Flatpak or Snap application generally cannot read
+anything under a dot-directory in your home, so a favourite in
+`~/.local/share/winclip/gifs` will paste as nothing. GIFs found by the scanner
+in `~/Pictures` are on a visible path and work fine. Switch to **Still image
+(PNG)** if your usual target is sandboxed.
 
 ### Online search
 
