@@ -167,6 +167,13 @@
     </key>
 
     <key name="last-tab" type="s">
+      <choices>
+        <choice value="clipboard"/>
+        <choice value="gif"/>
+        <choice value="emoji"/>
+        <choice value="kaomoji"/>
+        <choice value="symbols"/>
+      </choices>
       <default>'clipboard'</default>
       <summary>Tab to reopen on</summary>
     </key>
@@ -184,6 +191,26 @@
     <key name="emoji-pinned" type="as">
       <default>[]</default>
       <summary>Pinned emoji</summary>
+    </key>
+
+    <key name="kaomoji-recent" type="as">
+      <default>[]</default>
+      <summary>Recently used kaomoji</summary>
+    </key>
+
+    <key name="kaomoji-pinned" type="as">
+      <default>[]</default>
+      <summary>Pinned kaomoji</summary>
+    </key>
+
+    <key name="symbol-recent" type="as">
+      <default>[]</default>
+      <summary>Recently used symbols</summary>
+    </key>
+
+    <key name="symbol-pinned" type="as">
+      <default>[]</default>
+      <summary>Pinned symbols</summary>
     </key>
 
   </schema>

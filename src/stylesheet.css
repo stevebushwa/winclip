@@ -21,7 +21,9 @@
 }
 
 .winclip-tab {
-  padding: 6px 10px;
+  /* Five tabs share the width, so keep the padding tight. */
+  padding: 6px 5px;
+  font-size: 0.92em;
   border-radius: 8px;
   color: rgba(255, 255, 255, 0.72);
   font-weight: 500;
@@ -142,6 +144,37 @@
 
 .winclip-grid-row {
   spacing: 4px;
+}
+
+.winclip-symbol {
+  font-size: 19px;
+  border-radius: 8px;
+  padding: 2px;
+  text-align: center;
+}
+
+.winclip-symbol:hover {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+.winclip-symbol:selected {
+  background-color: rgba(120, 170, 255, 0.30);
+}
+
+/* Kaomoji are whole strings, so these are wide rows rather than square cells. */
+.winclip-kaomoji {
+  font-size: 13px;
+  border-radius: 8px;
+  padding: 4px 6px;
+  text-align: center;
+}
+
+.winclip-kaomoji:hover {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+.winclip-kaomoji:selected {
+  background-color: rgba(120, 170, 255, 0.30);
 }
 
 .winclip-emoji {

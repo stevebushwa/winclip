@@ -16,10 +16,12 @@ import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import {ClipboardTab, EmojiTab, GifTab} from './tabs.js';
+import {ClipboardTab, GifTab} from './tabs.js';
+import {EmojiTab, KaomojiTab, SymbolTab} from './glyphTab.js';
 import {sendPaste} from './paste.js';
 
 const SEARCH_DEBOUNCE_MS = 90;
+const TAB_IDS = ['clipboard', 'gif', 'emoji', 'kaomoji', 'symbols'];
 
 export class Overlay {
     constructor({settings, store, monitor, openPrefs}) {
@@ -62,7 +64,8 @@ export class Overlay {
 
         // -- tab bar
         const bar = new St.BoxLayout({style_class: 'winclip-tabbar', x_expand: true});
-        this._tabs = [new ClipboardTab(this), new GifTab(this), new EmojiTab(this)];
+        this._tabs = [new ClipboardTab(this), new GifTab(this), new EmojiTab(this),
+            new KaomojiTab(this), new SymbolTab(this)];
         this._tabButtons = this._tabs.map((tab, i) => {
             const button = new St.Button({
                 style_class: 'winclip-tab',
@@ -155,7 +158,7 @@ export class Overlay {
         const wanted = this.settings.get_boolean('remember-tab')
             ? this.settings.get_string('last-tab')
             : 'clipboard';
-        const index = ['clipboard', 'gif', 'emoji'].indexOf(wanted);
+        const index = TAB_IDS.indexOf(wanted);
         this._setTab(index < 0 ? 0 : index);
 
         this._search.set_text('');
@@ -222,7 +225,7 @@ export class Overlay {
             else
                 b.remove_style_pseudo_class('checked');
         });
-        this.settings.set_string('last-tab', ['clipboard', 'gif', 'emoji'][index]);
+        this.settings.set_string('last-tab', TAB_IDS[index]);
     }
 
     _cycleTab(step) {

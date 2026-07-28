@@ -8,6 +8,9 @@ an overlay at the pointer, on top of whatever window you are in.
   Downloads and Pictures folders
 - **Emoji** — 1,914 emoji searchable by name and keyword, with pins, recents
   and a skin-tone setting
+- **Kaomoji** — 83 text faces: the shrug, Lenny, table flip and friends
+- **Symbols** — 1,073 characters across currency, arrows, maths, punctuation,
+  shapes and Greek
 
 Choosing an entry pastes it straight into the window underneath.
 
@@ -50,7 +53,7 @@ Then log out and back in — GNOME only scans for new extensions at startup.
 | type | search the current tab |
 | `↑ ↓ ← →` | move between entries |
 | `Enter` | paste the selection |
-| `Tab` / `Shift+Tab` | switch tab |
+| `Tab` / `Shift+Tab` | switch tab (five: Clipboard, GIF, Emoji, Kaomoji, Symbols) |
 | `Ctrl+P` | pin / unpin |
 | `Delete` | remove from history |
 | `Esc` | close |

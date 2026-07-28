@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Steve Bushwa
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-/* The three pages of the overlay.
+/* The clipboard and GIF pages of the overlay.
  *
  * Every tab exposes the same small contract so the overlay can drive keyboard
  * navigation without knowing what it is looking at:
@@ -19,65 +19,15 @@ import St from 'gi://St';
 
 import {TYPE_IMAGE, TYPE_TEXT} from './store.js';
 import {createImageActor, setThumbHovered} from './imageUtil.js';
-import {EMOJI, EMOJI_GROUPS} from './emojiData.js';
+import {column, emptyNotice, gridOf, matches, scrollable, sectionHeader} from './uiHelpers.js';
 import {GifScanner} from './gifScanner.js';
 import {GifSearch} from './gifSearch.js';
 
 const TEXT_PREVIEW_CHARS = 220;
 const THUMB_W = 260;
 const THUMB_H = 84;
-const EMOJI_CELL = 42;
-const MAX_EMOJI_CELLS = 400;
 const GIF_CELL_W = 124;
 const GIF_CELL_H = 96;
-
-function scrollable(child) {
-    const view = new St.ScrollView({
-        style_class: 'winclip-scroll',
-        x_expand: true,
-        y_expand: true,
-        hscrollbar_policy: St.PolicyType.NEVER,
-        vscrollbar_policy: St.PolicyType.AUTOMATIC,
-    });
-    view.set_child(child);
-    return view;
-}
-
-function column() {
-    return new St.BoxLayout({
-        orientation: Clutter.Orientation.VERTICAL,
-        style_class: 'winclip-list',
-        x_expand: true,
-    });
-}
-
-function sectionHeader(text) {
-    return new St.Label({style_class: 'winclip-section', text});
-}
-
-function emptyNotice(text) {
-    return new St.Label({style_class: 'winclip-empty', text});
-}
-
-/** Lays cells out in rows of `columns`, returning the container. */
-function gridOf(cells, columns, styleClass) {
-    const grid = new St.BoxLayout({
-        orientation: Clutter.Orientation.VERTICAL,
-        style_class: styleClass,
-        x_expand: true,
-    });
-    for (let i = 0; i < cells.length; i += columns) {
-        const row = new St.BoxLayout({style_class: 'winclip-grid-row', x_expand: true});
-        for (const cell of cells.slice(i, i + columns))
-            row.add_child(cell.actor);
-        grid.add_child(row);
-    }
-    return grid;
-}
-
-function matches(haystack, query) {
-    return !query || haystack.toLowerCase().includes(query);
-}
 
 // ---------------------------------------------------------------- clipboard
 
@@ -531,170 +481,3 @@ export class GifTab {
     }
 }
 
-// -------------------------------------------------------------------- emoji
-
-/** Splices a skin-tone modifier in after the base codepoint. */
-export function applyTone(glyph, tone) {
-    if (!tone)
-        return glyph;
-    const cps = [...glyph];
-    if (cps.length > 1 && cps[1] === '️')
-        cps.splice(1, 1); // the tone modifier replaces the variation selector
-    cps.splice(1, 0, String.fromCodePoint(0x1F3FA + tone));
-    return cps.join('');
-}
-
-export class EmojiTab {
-    constructor(overlay) {
-        this._overlay = overlay;
-        this._group = 0; // -1 is the pinned/recent view; 0+ are Unicode groups
-        this._box = column();
-
-        this._groupBar = new St.BoxLayout({style_class: 'winclip-groupbar', x_expand: true});
-        const wrapper = new St.BoxLayout({
-            orientation: Clutter.Orientation.VERTICAL,
-            x_expand: true,
-            y_expand: true,
-        });
-        this.scrollView = scrollable(this._box);
-        wrapper.add_child(this._groupBar);
-        wrapper.add_child(this.scrollView);
-
-        this.actor = wrapper;
-        this.columns = 9;
-        this.cells = [];
-        this._buildGroupBar();
-    }
-
-    get title() {
-        return 'Emoji';
-    }
-
-    _buildGroupBar() {
-        const entries = [['★', -1], ...EMOJI_GROUPS.map((name, i) => [groupGlyph(i), i])];
-        for (const [glyph, index] of entries) {
-            const button = new St.Button({
-                style_class: 'winclip-group-button',
-                label: glyph,
-            });
-            button.connect('clicked', () => {
-                this._group = index;
-                this._syncGroupBar();
-                this._overlay.refresh();
-            });
-            button._groupIndex = index;
-            this._groupBar.add_child(button);
-        }
-        this._syncGroupBar();
-    }
-
-    _syncGroupBar() {
-        for (const child of this._groupBar.get_children()) {
-            if (child._groupIndex === this._group)
-                child.add_style_pseudo_class('checked');
-            else
-                child.remove_style_pseudo_class('checked');
-        }
-    }
-
-    refresh(query) {
-        this._box.destroy_all_children();
-        this.cells = [];
-
-        const settings = this._overlay.settings;
-        const tone = settings.get_int('skin-tone');
-        const pinnedSet = new Set(settings.get_strv('emoji-pinned'));
-
-        this.columns = Math.max(1, Math.floor(this._overlay.contentWidth / EMOJI_CELL));
-        const q = (query || '').toLowerCase();
-
-        // Searching looks across every group; browsing stays within one, so a
-        // single refresh never has to build all ~1900 buttons.
-        if (q) {
-            const hits = EMOJI.filter(e => matches(`${e.n} ${e.k}`, q));
-            if (!hits.length) {
-                this._box.add_child(emptyNotice('No emoji match that.'));
-                return;
-            }
-            this._addGrid(hits.slice(0, MAX_EMOJI_CELLS), tone, pinnedSet);
-            if (hits.length > MAX_EMOJI_CELLS) {
-                this._box.add_child(emptyNotice(
-                    `${hits.length - MAX_EMOJI_CELLS} more — keep typing to narrow it down.`));
-            }
-            return;
-        }
-
-        if (this._group === -1) {
-            const pinned = [...pinnedSet];
-            const recents = settings.get_strv('emoji-recent').filter(g => !pinnedSet.has(g));
-            if (!pinned.length && !recents.length) {
-                this._box.add_child(emptyNotice(
-                    'No favourites yet.\nPick an emoji, or press Ctrl+P to pin one.'));
-                return;
-            }
-            if (pinned.length) {
-                this._box.add_child(sectionHeader('Pinned'));
-                this._addGrid(pinned.map(g => ({c: g, n: g, t: 0})), tone, pinnedSet);
-            }
-            if (recents.length) {
-                this._box.add_child(sectionHeader('Recent'));
-                this._addGrid(recents.map(g => ({c: g, n: g, t: 0})), tone, pinnedSet);
-            }
-            return;
-        }
-
-        this._addGrid(EMOJI.filter(e => e.g === this._group), tone, pinnedSet);
-    }
-
-    _addGrid(entries, tone, pinnedSet) {
-        this._box.add_child(gridOf(
-            entries.map(e => this._cell(e, tone, pinnedSet)),
-            this.columns, 'winclip-grid'));
-    }
-
-    _cell(entry, tone, pinnedSet) {
-        const glyph = entry.t ? applyTone(entry.c, tone) : entry.c;
-        const button = new St.Button({
-            style_class: pinnedSet.has(glyph)
-                ? 'winclip-emoji winclip-pinned-cell'
-                : 'winclip-emoji',
-            label: glyph,
-        });
-        button.set_size(EMOJI_CELL - 4, EMOJI_CELL - 4);
-
-        const cell = {
-            actor: button,
-            activate: () => this._apply(glyph),
-            togglePin: () => this._togglePin(glyph),
-        };
-        button.connect('clicked', () => this._overlay.activateCell(cell));
-        this.cells.push(cell);
-        return cell;
-    }
-
-    _togglePin(glyph) {
-        const settings = this._overlay.settings;
-        const pinned = settings.get_strv('emoji-pinned');
-        const i = pinned.indexOf(glyph);
-        if (i >= 0)
-            pinned.splice(i, 1);
-        else
-            pinned.unshift(glyph);
-        settings.set_strv('emoji-pinned', pinned.slice(0, 64));
-        this._overlay.refresh();
-    }
-
-    _apply(glyph) {
-        const settings = this._overlay.settings;
-        const recents = settings.get_strv('emoji-recent').filter(g => g !== glyph);
-        recents.unshift(glyph);
-        settings.set_strv('emoji-recent', recents.slice(0, 40));
-        // setText goes through the monitor's self-write guard, so picking an
-        // emoji does not pollute the clipboard history.
-        this._overlay.monitor.setText(glyph);
-    }
-}
-
-function groupGlyph(index) {
-    return ['😀', '👋', '🐻', '🍎', '✈️', '⚽', '💡', '🔣', '🏳️'][index] ?? '•';
-}
