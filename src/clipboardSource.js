@@ -13,26 +13,14 @@
  * GIF appeared to do nothing at all. So a GIF is converted to PNG by default,
  * which pastes everywhere at the cost of the animation, and the format is a
  * setting for anyone who would rather keep it moving.
+ *
+ * Reading is asynchronous throughout: this runs inside the compositor, and
+ * blocking it on disk stalls the desktop.
  */
 
 import GdkPixbuf from 'gi://GdkPixbuf';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-
-function fileBytes(path) {
-    const [ok, contents] = GLib.file_get_contents(path);
-    if (!ok)
-        throw new Error(`winclip: could not read ${path}`);
-    return new GLib.Bytes(contents);
-}
-
-/** Renders the first frame of any image as PNG. */
-function asPng(path) {
-    const pixbuf = GdkPixbuf.Pixbuf.new_from_file(path);
-    const [ok, buffer] = pixbuf.save_to_bufferv('png', [], []);
-    if (!ok)
-        throw new Error(`winclip: could not render ${path} as PNG`);
-    return new GLib.Bytes(buffer);
-}
 
 /** A file:// URI, which file-aware apps treat as "a file was pasted". */
 function asUriList(path) {
@@ -40,37 +28,75 @@ function asUriList(path) {
     return new GLib.Bytes(new TextEncoder().encode(uri));
 }
 
+/** Renders already-loaded image bytes as PNG (the first frame, for a GIF). */
+function toPng(contents) {
+    const loader = GdkPixbuf.PixbufLoader.new();
+    try {
+        loader.write(contents);
+        loader.close();
+    } catch (e) {
+        try {
+            loader.close();
+        } catch {
+            // already closed
+        }
+        throw e;
+    }
+    const pixbuf = loader.get_pixbuf();
+    if (!pixbuf)
+        throw new Error('winclip: could not decode image for PNG conversion');
+    const [ok, buffer] = pixbuf.save_to_bufferv('png', [], []);
+    if (!ok)
+        throw new Error('winclip: could not encode PNG');
+    return new GLib.Bytes(buffer);
+}
+
 /**
- * Works out the single flavour to publish for an image file.
+ * Works out the single flavour to publish for an image file and hands it to
+ * `callback` as {mime, bytes}, or null if nothing could be produced.
  *
- * `preference` only applies to animated formats; a PNG is always offered as
- * image/png. Returns {mime, bytes}, or null if nothing could be produced.
+ * `preference` only applies to animated formats; a still is always offered as
+ * image/png, which is what paste targets ask for.
  */
-export function imageFlavour(path, mime, preference = 'png') {
+export function imageFlavour(path, mime, preference, callback) {
     const isGif = mime === 'image/gif';
 
-    try {
-        if (!isGif) {
-            // Already a still. PNG is what paste targets ask for; anything
-            // else gets converted so it lands rather than silently failing.
-            return mime === 'image/png'
-                ? {mime: 'image/png', bytes: fileBytes(path)}
-                : {mime: 'image/png', bytes: asPng(path)};
+    // A URI needs no file contents at all.
+    if (isGif && preference === 'uri') {
+        try {
+            callback({mime: 'text/uri-list', bytes: asUriList(path)});
+        } catch (e) {
+            console.error(`winclip: could not build a URI for ${path}`, e);
+            callback(null);
+        }
+        return;
+    }
+
+    Gio.File.new_for_path(path).load_contents_async(null, (file, res) => {
+        let contents;
+        try {
+            [, contents] = file.load_contents_finish(res);
+        } catch (e) {
+            console.error(`winclip: could not read ${path}`, e);
+            callback(null);
+            return;
         }
 
-        switch (preference) {
-        case 'gif':
-            // Keeps the animation, but only apps that ask for image/gif
-            // will see anything at all.
-            return {mime: 'image/gif', bytes: fileBytes(path)};
-        case 'uri':
-            // Chat clients and file managers attach the real animated file.
-            return {mime: 'text/uri-list', bytes: asUriList(path)};
-        default:
-            return {mime: 'image/png', bytes: asPng(path)};
+        try {
+            if (isGif && preference === 'gif') {
+                // Keeps the animation, but only apps that ask for image/gif
+                // will see anything at all.
+                callback({mime: 'image/gif', bytes: new GLib.Bytes(contents)});
+                return;
+            }
+            if (!isGif && mime === 'image/png') {
+                callback({mime: 'image/png', bytes: new GLib.Bytes(contents)});
+                return;
+            }
+            callback({mime: 'image/png', bytes: toPng(contents)});
+        } catch (e) {
+            console.error(`winclip: could not prepare ${path} for the clipboard`, e);
+            callback(null);
         }
-    } catch (e) {
-        console.error(`winclip: could not prepare ${path} for the clipboard`, e);
-        return null;
-    }
+    });
 }

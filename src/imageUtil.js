@@ -22,6 +22,7 @@ import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import GLib from 'gi://GLib';
 import GdkPixbuf from 'gi://GdkPixbuf';
+import Gio from 'gi://Gio';
 import St from 'gi://St';
 
 const TICK_MS = 40;
@@ -81,40 +82,48 @@ function scaleToFit(pixbuf, maxW, maxH) {
  * frame as it decodes, instead of building full-resolution frames we would
  * immediately throw away.
  */
-function loadScaledAnimation(path, maxW, maxH) {
-    const loader = GdkPixbuf.PixbufLoader.new();
-    loader.connect('size-prepared', (self, width, height) => {
-        const scale = Math.min(maxW / width, maxH / height, 1);
-        self.set_size(
-            Math.max(1, Math.round(width * scale)),
-            Math.max(1, Math.round(height * scale)));
-    });
-
-    try {
-        const [ok, contents] = GLib.file_get_contents(path);
-        if (!ok) {
-            loader.close();
-            return null;
-        }
-        loader.write(contents);
-        loader.close();
-    } catch (e) {
+function loadScaledAnimation(path, maxW, maxH, callback) {
+    Gio.File.new_for_path(path).load_contents_async(null, (file, res) => {
+        let contents;
         try {
-            loader.close();
-        } catch {
-            // already closed
+            [, contents] = file.load_contents_finish(res);
+        } catch (e) {
+            if (!warnedPaths.has(path)) {
+                warnedPaths.add(path);
+                console.warn(`winclip: cannot read ${path}`, e);
+            }
+            callback(null);
+            return;
         }
-        if (!warnedPaths.has(path)) {
-            warnedPaths.add(path);
-            console.warn(`winclip: cannot animate ${path}`, e);
-        }
-        return null;
-    }
 
-    const animation = loader.get_animation();
-    if (!animation || animation.is_static_image())
-        return null;
-    return animation;
+        const loader = GdkPixbuf.PixbufLoader.new();
+        loader.connect('size-prepared', (self, width, height) => {
+            const scale = Math.min(maxW / width, maxH / height, 1);
+            self.set_size(
+                Math.max(1, Math.round(width * scale)),
+                Math.max(1, Math.round(height * scale)));
+        });
+
+        try {
+            loader.write(contents);
+            loader.close();
+        } catch (e) {
+            try {
+                loader.close();
+            } catch {
+                // already closed
+            }
+            if (!warnedPaths.has(path)) {
+                warnedPaths.add(path);
+                console.warn(`winclip: cannot animate ${path}`, e);
+            }
+            callback(null);
+            return;
+        }
+
+        const animation = loader.get_animation();
+        callback(animation && !animation.is_static_image() ? animation : null);
+    });
 }
 
 /* Only a handful play at once, and whatever the pointer is over always wins a
@@ -136,7 +145,7 @@ class Ticker {
     }
 
     activate(player) {
-        if (this._players.has(player))
+        if (this._players.has(player) || player.failed || player.loading || player.dead)
             return;
         if (this._players.size >= MAX_ACTIVE) {
             const victim = [...this._players].find(p => !p.hovered);
@@ -144,9 +153,32 @@ class Ticker {
                 return;
             this._release(victim);
         }
-        if (!this._load(player))
+        if (player.iter) {
+            this._start(player);
             return;
+        }
 
+        /* Decoding happens here rather than when the thumbnail is built, so a
+         * tab full of GIFs only decodes the few that actually play. */
+        player.loading = true;
+        loadScaledAnimation(player.path, player.maxW, player.maxH, animation => {
+            player.loading = false;
+            if (player.dead)
+                return;
+            if (!animation) {
+                player.failed = true;
+                return;
+            }
+            player.animation = animation;
+            player.iter = animation.get_iter(null);
+            player.frames = 0;
+            // The tab may have moved on while we were reading from disk.
+            if (this._players.size < MAX_ACTIVE || player.hovered)
+                this._start(player);
+        });
+    }
+
+    _start(player) {
         this._players.add(player);
         if (!this._source) {
             this._source = GLib.timeout_add(GLib.PRIORITY_DEFAULT_IDLE, TICK_MS, () => {
@@ -158,25 +190,6 @@ class Ticker {
                 return GLib.SOURCE_CONTINUE;
             });
         }
-    }
-
-    /* Decoding happens here rather than when the thumbnail is built, so a tab
-     * full of GIFs only decodes the few that are actually playing. */
-    _load(player) {
-        if (player.iter)
-            return true;
-        if (player.failed)
-            return false;
-
-        const animation = loadScaledAnimation(player.path, player.maxW, player.maxH);
-        if (!animation) {
-            player.failed = true;
-            return false;
-        }
-        player.animation = animation;
-        player.iter = animation.get_iter(null);
-        player.frames = 0;
-        return true;
     }
 
     /** Stops a player and lets its decoded frames go. */
@@ -193,7 +206,9 @@ class Ticker {
             this.activate(player);
     }
 
+    /* Marked dead so an in-flight decode does not resurrect a destroyed actor. */
     remove(player) {
+        player.dead = true;
         this._release(player);
     }
 
@@ -237,15 +252,27 @@ class Ticker {
     }
 }
 
-const ticker = new Ticker();
+/* Built on first use rather than at module scope: importing a module must not
+ * create anything, since imports happen before enable() is called. Dropped on
+ * disable so no module-level state outlives the extension.
+ */
+let ticker = null;
+
+function getTicker() {
+    if (!ticker)
+        ticker = new Ticker();
+    return ticker;
+}
 
 export function stopAllAnimations() {
-    ticker.stop();
+    ticker?.stop();
+    ticker = null;
+    warnedPaths.clear();
 }
 
 /** How many GIFs are currently animating; useful when diagnosing load. */
 export function activeAnimationCount() {
-    return ticker.activeCount;
+    return ticker?.activeCount ?? 0;
 }
 
 /**
@@ -298,25 +325,19 @@ function attachAnimation(actor, path, maxW, maxH) {
         iter: null,
         frames: 0,
         failed: false,
+        loading: false,
+        dead: false,
         dueAt: 0,
         hovered: false,
     };
     actor._winclipPlayer = player;
-    ticker.request(player);
-    actor.connect('destroy', () => ticker.remove(player));
+    getTicker().request(player);
+    actor.connect('destroy', () => ticker?.remove(player));
 }
 
 /** Gives a thumbnail's animation priority while the pointer is over it. */
 export function setThumbHovered(actor, hovered) {
     const player = actor?._winclipPlayer;
     if (player)
-        ticker.setHovered(player, hovered);
-}
-
-/** Reads a file into GLib.Bytes, for putting images back on the clipboard. */
-export function readFileBytes(path) {
-    const [ok, contents] = GLib.file_get_contents(path);
-    if (!ok)
-        throw new Error(`winclip: could not read ${path}`);
-    return new GLib.Bytes(contents);
+        getTicker().setHovered(player, hovered);
 }

@@ -159,14 +159,19 @@ export class ClipboardMonitor {
      * nothing, because applications ask for image/png.
      */
     setImageFile(path, mime) {
-        const flavour = imageFlavour(
-            path, mime, this._settings.get_string('gif-paste-format'));
-        if (!flavour)
-            return false;
-        this.withSelfWrite(() => {
-            this._clipboard.set_content(
-                St.ClipboardType.CLIPBOARD, flavour.mime, flavour.bytes);
+        return new Promise(resolve => {
+            imageFlavour(path, mime, this._settings.get_string('gif-paste-format'),
+                flavour => {
+                    if (!flavour) {
+                        resolve(false);
+                        return;
+                    }
+                    this.withSelfWrite(() => {
+                        this._clipboard.set_content(
+                            St.ClipboardType.CLIPBOARD, flavour.mime, flavour.bytes);
+                    });
+                    resolve(true);
+                });
         });
-        return true;
     }
 }

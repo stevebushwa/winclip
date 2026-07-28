@@ -38,7 +38,7 @@ export class Store {
         if (this._saveSource) {
             GLib.source_remove(this._saveSource);
             this._saveSource = 0;
-            this._writeNow();
+            this._writeBlocking();
         }
         this._changedCbs.clear();
     }
@@ -64,45 +64,81 @@ export class Store {
 
     // ---------------------------------------------------------------- load
 
+    /* Reads asynchronously: this runs inside the compositor, where blocking on
+     * disk stalls the whole desktop. The store simply starts empty and fills
+     * in a moment later, notifying listeners when it does. */
     _load() {
-        let raw;
-        try {
-            const [ok, bytes] = GLib.file_get_contents(this._file);
-            if (!ok)
-                return;
-            raw = new TextDecoder().decode(bytes);
-        } catch {
-            return; // first run
-        }
-
-        let data;
-        try {
-            data = JSON.parse(raw);
-        } catch (e) {
-            console.error('winclip: store.json unreadable, starting fresh', e);
-            this._backupCorrupt();
-            return;
-        }
-
-        if (!data || !Array.isArray(data.items))
-            return;
-
-        // Drop entries whose blob went missing or was left truncated. This
-        // used to happen silently, which made a picture vanishing from the
-        // history impossible to explain after the fact.
-        let dropped = 0;
-        this.items = data.items.filter(it => {
-            if (it.type === TYPE_IMAGE) {
-                const ok = it.file && blobIsUsable(this._blobPath(it.file));
-                if (!ok)
-                    dropped++;
-                return ok;
+        Gio.File.new_for_path(this._file).load_contents_async(null, (file, res) => {
+            let raw;
+            try {
+                const [, bytes] = file.load_contents_finish(res);
+                raw = new TextDecoder().decode(bytes);
+            } catch {
+                return; // first run, or nothing to read
             }
-            return typeof it.text === 'string';
+
+            let data;
+            try {
+                data = JSON.parse(raw);
+            } catch (e) {
+                console.error('winclip: store.json unreadable, starting fresh', e);
+                this._backupCorrupt();
+                return;
+            }
+
+            if (!data || !Array.isArray(data.items))
+                return;
+
+            this.items = data.items.filter(
+                it => (it.type === TYPE_IMAGE ? !!it.file : typeof it.text === 'string'));
+            this._nextId = Number(data.nextId) || this.items.length + 1;
+
+            // The caps were applied at enable(), when there was nothing loaded
+            // yet, so they have to be applied again now that there is.
+            if (this._evict())
+                this._scheduleSave();
+
+            this._emitChanged();
+            this._pruneMissingBlobs();
         });
-        if (dropped)
-            console.warn(`winclip: dropped ${dropped} image entr${dropped === 1 ? 'y' : 'ies'} whose file was gone`);
-        this._nextId = Number(data.nextId) || this.items.length + 1;
+    }
+
+    /* Entries whose blob went missing or was truncated are dropped once the
+     * index is loaded. Doing it here rather than inline keeps the load off
+     * synchronous file checks, and logging it means a picture vanishing from
+     * the history can actually be explained afterwards. */
+    _pruneMissingBlobs() {
+        const images = this.items.filter(it => it.type === TYPE_IMAGE);
+        if (!images.length)
+            return;
+
+        let outstanding = images.length;
+        const doomed = [];
+        const settle = () => {
+            if (--outstanding > 0)
+                return;
+            if (!doomed.length)
+                return;
+            const dropping = new Set(doomed);
+            this.items = this.items.filter(it => !dropping.has(it));
+            console.warn(`winclip: dropped ${doomed.length} image ` +
+                `entr${doomed.length === 1 ? 'y' : 'ies'} whose file was gone`);
+            this._scheduleSave();
+        };
+
+        for (const item of images) {
+            Gio.File.new_for_path(this._blobPath(item.file)).query_info_async(
+                'standard::size', Gio.FileQueryInfoFlags.NONE,
+                GLib.PRIORITY_LOW, null, (file, res) => {
+                    try {
+                        if (file.query_info_finish(res).get_size() === 0)
+                            doomed.push(item);
+                    } catch {
+                        doomed.push(item);
+                    }
+                    settle();
+                });
+        }
     }
 
     _backupCorrupt() {
@@ -128,14 +164,31 @@ export class Store {
         });
     }
 
-    _writeNow() {
-        const payload = JSON.stringify({
+    _payload() {
+        return JSON.stringify({
             version: 1,
             nextId: this._nextId,
             items: this.items,
         });
+    }
+
+    _writeNow() {
+        const bytes = new GLib.Bytes(new TextEncoder().encode(this._payload()));
+        Gio.File.new_for_path(this._file).replace_contents_bytes_async(
+            bytes, null, false, Gio.FileCreateFlags.PRIVATE, null, (file, res) => {
+                try {
+                    file.replace_contents_finish(res);
+                } catch (e) {
+                    console.error('winclip: could not write store.json', e);
+                }
+            });
+    }
+
+    /* Only used on disable, where an async write would very likely not finish
+     * before the extension is torn down and the history would be lost. */
+    _writeBlocking() {
         try {
-            GLib.file_set_contents(this._file, payload);
+            GLib.file_set_contents(this._file, this._payload());
         } catch (e) {
             console.error('winclip: could not write store.json', e);
         }
@@ -188,11 +241,13 @@ export class Store {
             return;
         if (this.items.some(it => it.file === name))
             return;
-        try {
-            Gio.File.new_for_path(path).delete(null);
-        } catch {
-            // already gone
-        }
+        Gio.File.new_for_path(path).delete_async(GLib.PRIORITY_LOW, null, (file, res) => {
+            try {
+                file.delete_finish(res);
+            } catch {
+                // already gone
+            }
+        });
     }
 
     // ----------------------------------------------------------- mutations
@@ -422,16 +477,6 @@ export class Store {
 
     gifs() {
         return this.items.filter(it => it.type === TYPE_IMAGE && it.mime === 'image/gif');
-    }
-}
-
-function blobIsUsable(path) {
-    try {
-        const info = Gio.File.new_for_path(path).query_info(
-            'standard::size', Gio.FileQueryInfoFlags.NONE, null);
-        return info.get_size() > 0;
-    } catch {
-        return false;
     }
 }
 

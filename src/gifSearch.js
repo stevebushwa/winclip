@@ -330,23 +330,45 @@ export class GifSearch {
         }
     }
 
+    /* Best effort and asynchronous: leftover preview files are harmless, and
+     * this runs on disable where blocking the compositor is least welcome. */
     _clearCache() {
-        let dir;
-        try {
-            dir = Gio.File.new_for_path(this._cacheDir).enumerate_children(
-                'standard::name', Gio.FileQueryInfoFlags.NONE, null);
-        } catch {
-            return;
-        }
-        let info;
-        while ((info = dir.next_file(null)) !== null) {
-            try {
-                Gio.File.new_for_path(
-                    GLib.build_filenamev([this._cacheDir, info.get_name()])).delete(null);
-            } catch {
-                // best effort
-            }
-        }
-        dir.close(null);
+        Gio.File.new_for_path(this._cacheDir).enumerate_children_async(
+            'standard::name', Gio.FileQueryInfoFlags.NONE,
+            GLib.PRIORITY_LOW, null, (file, res) => {
+                let enumerator;
+                try {
+                    enumerator = file.enumerate_children_finish(res);
+                } catch {
+                    return;
+                }
+                const drain = () => {
+                    enumerator.next_files_async(32, GLib.PRIORITY_LOW, null, (src, r) => {
+                        let infos;
+                        try {
+                            infos = src.next_files_finish(r);
+                        } catch {
+                            infos = [];
+                        }
+                        if (!infos.length) {
+                            src.close_async(GLib.PRIORITY_LOW, null, () => {});
+                            return;
+                        }
+                        for (const info of infos) {
+                            Gio.File.new_for_path(GLib.build_filenamev(
+                                [this._cacheDir, info.get_name()]))
+                                .delete_async(GLib.PRIORITY_LOW, null, (f, dr) => {
+                                    try {
+                                        f.delete_finish(dr);
+                                    } catch {
+                                        // best effort
+                                    }
+                                });
+                        }
+                        drain();
+                    });
+                };
+                drain();
+            });
     }
 }

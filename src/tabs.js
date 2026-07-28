@@ -224,8 +224,14 @@ export class ClipboardTab {
             return;
         }
         const path = this._overlay.store.blobPath(item);
-        if (!this._overlay.monitor.setImageFile(path, item.mime || 'image/png'))
-            console.error(`winclip: could not put ${path} on the clipboard`);
+        // Resolves once the clipboard actually holds it, so the overlay can
+        // hold the synthetic paste back until then.
+        return this._overlay.monitor.setImageFile(path, item.mime || 'image/png')
+            .then(ok => {
+                if (!ok)
+                    console.error(`winclip: could not put ${path} on the clipboard`);
+                return ok;
+            });
     }
 }
 
@@ -238,10 +244,66 @@ export class ClipboardTab {
 class LocalGifProvider {
     constructor(store) {
         this._store = store;
+        this._folder = [];
+        this._listing = false;
+        this._listedAt = 0;
     }
 
     get id() {
         return 'local';
+    }
+
+    /** Re-lists the favourites folder if the cached listing has gone stale. */
+    refreshFolder(onDone) {
+        const FOLDER_STALE_US = 10 * 1000 * 1000;
+        if (this._listing)
+            return;
+        if (this._listedAt && GLib.get_monotonic_time() - this._listedAt < FOLDER_STALE_US)
+            return;
+
+        this._listing = true;
+        Gio.File.new_for_path(this._store.gifDir).enumerate_children_async(
+            'standard::name,standard::is-hidden', Gio.FileQueryInfoFlags.NONE,
+            GLib.PRIORITY_LOW, null, (file, res) => {
+                let enumerator;
+                try {
+                    enumerator = file.enumerate_children_finish(res);
+                } catch {
+                    this._listing = false;
+                    this._listedAt = GLib.get_monotonic_time();
+                    return;
+                }
+                const found = [];
+                const readMore = () => {
+                    enumerator.next_files_async(32, GLib.PRIORITY_LOW, null, (src, r) => {
+                        let infos;
+                        try {
+                            infos = src.next_files_finish(r);
+                        } catch {
+                            infos = [];
+                        }
+                        if (!infos.length) {
+                            src.close_async(GLib.PRIORITY_LOW, null, () => {});
+                            this._folder = found;
+                            this._listing = false;
+                            this._listedAt = GLib.get_monotonic_time();
+                            onDone?.();
+                            return;
+                        }
+                        for (const info of infos) {
+                            const name = info.get_name();
+                            if (info.get_is_hidden() || !name.toLowerCase().endsWith('.gif'))
+                                continue;
+                            found.push({
+                                name,
+                                path: GLib.build_filenamev([this._store.gifDir, name]),
+                            });
+                        }
+                        readMore();
+                    });
+                };
+                readMore();
+            });
     }
 
     /** Returns [{path, pinned, source, item?}] — history plus the favourites folder. */
@@ -264,28 +326,19 @@ class LocalGifProvider {
             });
         }
 
-        // Anything the user dropped into ~/.local/share/winclip/gifs.
-        let dir;
-        try {
-            dir = Gio.File.new_for_path(this._store.gifDir).enumerate_children(
-                'standard::name,standard::is-hidden',
-                Gio.FileQueryInfoFlags.NONE, null);
-        } catch {
-            dir = null;
-        }
-        if (dir) {
-            let info;
-            while ((info = dir.next_file(null)) !== null) {
-                const name = info.get_name();
-                if (info.get_is_hidden() || !name.toLowerCase().endsWith('.gif'))
-                    continue;
-                const path = GLib.build_filenamev([this._store.gifDir, name]);
-                if (seen.has(path))
-                    continue;
-                seen.add(path);
-                results.push({path, pinned: true, source: 'folder', favouriteName: name});
-            }
-            dir.close(null);
+        // Anything the user dropped into ~/.local/share/winclip/gifs. Listed
+        // asynchronously and cached, since this runs on every refresh and
+        // blocking the compositor on a directory read would be felt.
+        for (const entry of this._folder) {
+            if (seen.has(entry.path))
+                continue;
+            seen.add(entry.path);
+            results.push({
+                path: entry.path,
+                pinned: true,
+                source: 'folder',
+                favouriteName: entry.name,
+            });
         }
 
         const q = (query || '').toLowerCase();
@@ -321,25 +374,26 @@ export class GifTab {
         this.columns = Math.max(1, Math.floor(this._overlay.contentWidth / GIF_CELL_W));
 
         const q = (query || '').toLowerCase();
-        const local = this.providers.flatMap(p => p.search(query));
-        const known = new Set(local.map(r => r.path));
 
-        // Files already on disk. The scan is async: draw whatever is cached
-        // now, and redraw if a fresh scan lands while the tab is still up.
-        this._scanner.maybeScan(() => {
-            if (this._overlay.isOpen && this._overlay.activeTab === this)
-                this._overlay.refresh();
-        });
-        const scanned = this._scanner.results
-            .filter(r => !known.has(r.path) && matches(r.name, q))
-            .map(r => ({path: r.path, pinned: false, source: 'scan'}));
-
-        // Online search, if the user has turned one on and typed something.
-        // Nothing here touches the network otherwise.
+        // Every source below is async and cached: this draws from whatever is
+        // known now, and redraws if fresh results land while the tab is up.
         const redraw = () => {
             if (this._overlay.isOpen && this._overlay.activeTab === this)
                 this._overlay.refresh();
         };
+
+        for (const provider of this.providers)
+            provider.refreshFolder?.(redraw);
+        const local = this.providers.flatMap(p => p.search(query));
+        const known = new Set(local.map(r => r.path));
+
+        this._scanner.maybeScan(redraw);
+        const scanned = this._scanner.results
+            .filter(r => !known.has(r.path) && matches(r.name, q))
+            .map(r => ({path: r.path, pinned: false, source: 'scan'}));
+
+        // Online search, only if the user turned one on and typed something.
+        // Nothing here touches the network otherwise.
         this._search.maybeSearch(query, redraw);
         const online = this._search.results.map(r => ({
             path: r.path, pinned: false, source: 'online', online: r,
@@ -454,13 +508,11 @@ export class GifTab {
     }
 
     _toClipboard(path) {
-        // Offers image/gif, a PNG rendering and a file URI together, so the
-        // paste lands whether the target wants the animation, a still, or the
-        // file itself.
-        if (this._overlay.monitor.setImageFile(path, 'image/gif'))
-            return true;
-        console.error(`winclip: could not put ${path} on the clipboard`);
-        return false;
+        return this._overlay.monitor.setImageFile(path, 'image/gif').then(ok => {
+            if (!ok)
+                console.error(`winclip: could not put ${path} on the clipboard`);
+            return ok;
+        });
     }
 
     /* Pinning a search result keeps it: the cache is wiped on disable, so the
