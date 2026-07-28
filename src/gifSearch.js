@@ -24,9 +24,9 @@ const MIN_QUERY = 2;
 
 /* Rating is stored provider-independently and mapped per API. */
 const RATINGS = {
-    strict:   {tenor: 'high',   giphy: 'g'},
-    moderate: {tenor: 'medium', giphy: 'pg-13'},
-    off:      {tenor: 'off',    giphy: 'r'},
+    strict:   {giphy: 'g'},
+    moderate: {giphy: 'pg-13'},
+    off:      {giphy: 'r'},
 };
 
 function query(params) {
@@ -36,36 +36,10 @@ function query(params) {
         .join('&');
 }
 
-class TenorProvider {
-    get id() {
-        return 'tenor';
-    }
-
-    get label() {
-        return 'Tenor';
-    }
-
-    url(q, key, limit, rating) {
-        return `https://tenor.googleapis.com/v2/search?${query({
-            q,
-            key,
-            limit,
-            client_key: 'winclip',
-            media_filter: 'tinygif,gif',
-            contentfilter: RATINGS[rating]?.tenor ?? 'medium',
-        })}`;
-    }
-
-    parse(json) {
-        return (json?.results ?? []).map(r => ({
-            id: `tenor-${r.id}`,
-            title: r.content_description ?? '',
-            preview: r.media_formats?.tinygif?.url,
-            full: r.media_formats?.gif?.url,
-        }));
-    }
-}
-
+/* Tenor is deliberately absent: Google stopped issuing keys on 13 January
+ * 2026 and shut the public API down on 30 June, taking the GIF pickers in
+ * Discord, WhatsApp, X and Bluesky with it. There is nothing left to talk to.
+ */
 class GiphyProvider {
     get id() {
         return 'giphy';
@@ -96,7 +70,6 @@ class GiphyProvider {
 }
 
 const PROVIDERS = {
-    tenor: new TenorProvider(),
     giphy: new GiphyProvider(),
 };
 

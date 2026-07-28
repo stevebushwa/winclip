@@ -104,7 +104,6 @@
     <key name="gif-search-provider" type="s">
       <choices>
         <choice value="none"/>
-        <choice value="tenor"/>
         <choice value="giphy"/>
       </choices>
       <default>'none'</default>
@@ -113,11 +112,6 @@
         Off by default. When set, search terms typed in the GIF tab are sent to
         the chosen service. Requires your own API key.
       </description>
-    </key>
-
-    <key name="gif-tenor-key" type="s">
-      <default>''</default>
-      <summary>Your Tenor API key</summary>
     </key>
 
     <key name="gif-giphy-key" type="s">

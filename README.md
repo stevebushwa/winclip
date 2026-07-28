@@ -100,18 +100,20 @@ So **Copy GIFs as** picks one:
 
 ### Online search
 
-Off by default. Choosing Tenor or Giphy in preferences and entering **your own
-API key** adds their results to the GIF tab. No key is bundled — one shipped
-inside an open-source extension would be extracted and revoked — so keys come
-from [Tenor](https://developers.google.com/tenor/guides/quickstart) or
-[Giphy](https://developers.giphy.com/docs/api/).
+Off by default. Turning on Giphy in preferences and entering **your own API
+key** adds its results to the GIF tab. No key is bundled — one shipped inside
+an open-source extension would be extracted and revoked — so get a free one
+from the [Giphy developer portal](https://developers.giphy.com/docs/api/).
 
-While enabled, what you type in the GIF tab is sent to the service you chose.
-Nothing contacts the network until a provider is selected, a key entered, and
-something typed. Results are fetched as small previews; the full-size file is
-only downloaded when you choose or pin one, and previews are cached in
-`~/.local/share/winclip/cache/`, which is emptied when the extension is
-disabled.
+Results appear once you **type at least two characters**; the tab does not
+call the API just for being opened. Nothing contacts the network until a
+provider is selected, a key entered, and something typed. Results are fetched
+as small previews; the full-size file is downloaded only when you choose or
+pin one, and previews are cached in `~/.local/share/winclip/cache/`, which is
+emptied when the extension is disabled.
+
+Tenor is not offered: Google stopped issuing keys on 13 January 2026 and shut
+the public API down on 30 June 2026.
 
 Scanning is asynchronous, capped by depth and result count, and cached, so it
 does not stall the shell on large folders. At most 12 GIFs animate at once;

@@ -18,7 +18,7 @@ const GIF_FORMATS = [
     ['gif', 'Animated GIF', 'Stays animated, but only some apps accept it'],
     ['uri', 'The file itself', 'Chat apps and file managers attach the animation'],
 ];
-const SEARCH_PROVIDERS = [['none', 'Off'], ['tenor', 'Tenor'], ['giphy', 'Giphy']];
+const SEARCH_PROVIDERS = [['none', 'Off'], ['giphy', 'Giphy']];
 const SEARCH_RATINGS = [['strict', 'Strict'], ['moderate', 'Moderate'], ['off', 'Off']];
 
 export default class WinClipPreferences extends ExtensionPreferences {
@@ -319,9 +319,9 @@ export default class WinClipPreferences extends ExtensionPreferences {
         const group = new Adw.PreferencesGroup({
             title: 'Online search',
             description: 'Off by default. When enabled, what you type in the GIF tab ' +
-                'is sent to the service you choose. Both need an API key of your own — ' +
-                'none is bundled, because a key shipped inside an open-source extension ' +
-                'would be extracted and revoked.',
+                'is sent to Giphy. It needs an API key of your own — none is bundled, ' +
+                'because a key shipped inside an open-source extension would be ' +
+                'extracted and revoked. Type at least two characters to search.',
         });
 
         const provider = new Adw.ComboRow({
@@ -334,19 +334,12 @@ export default class WinClipPreferences extends ExtensionPreferences {
             'gif-search-provider', SEARCH_PROVIDERS[provider.selected][0]));
         group.add(provider);
 
-        const tenorKey = new Adw.PasswordEntryRow({title: 'Tenor API key'});
-        settings.bind('gif-tenor-key', tenorKey, 'text', Gio.SettingsBindFlags.DEFAULT);
-        group.add(tenorKey);
-
         const giphyKey = new Adw.PasswordEntryRow({title: 'Giphy API key'});
         settings.bind('gif-giphy-key', giphyKey, 'text', Gio.SettingsBindFlags.DEFAULT);
         group.add(giphyKey);
 
-        // Only show the key that matters for the current choice.
         const syncKeyRows = () => {
-            const id = SEARCH_PROVIDERS[provider.selected][0];
-            tenorKey.visible = id === 'tenor';
-            giphyKey.visible = id === 'giphy';
+            giphyKey.visible = SEARCH_PROVIDERS[provider.selected][0] === 'giphy';
         };
         provider.connect('notify::selected', syncKeyRows);
         syncKeyRows();
@@ -371,20 +364,13 @@ export default class WinClipPreferences extends ExtensionPreferences {
 
         const help = new Adw.ActionRow({
             title: 'Where to get a key',
-            subtitle: 'Tenor keys come from Google Cloud; Giphy from their developer portal',
+            subtitle: 'A free account on the Giphy developer portal',
         });
-        const openTenor = new Gtk.LinkButton({
-            label: 'Tenor',
-            uri: 'https://developers.google.com/tenor/guides/quickstart',
-            valign: Gtk.Align.CENTER,
-        });
-        const openGiphy = new Gtk.LinkButton({
-            label: 'Giphy',
+        help.add_suffix(new Gtk.LinkButton({
+            label: 'Giphy developers',
             uri: 'https://developers.giphy.com/docs/api/',
             valign: Gtk.Align.CENTER,
-        });
-        help.add_suffix(openTenor);
-        help.add_suffix(openGiphy);
+        }));
         group.add(help);
 
         return group;
