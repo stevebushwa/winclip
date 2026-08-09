@@ -18,6 +18,13 @@
  *      that the animation then holds on to, and every tick allocated a fresh
  *      texture besides — about 43 MB per GIF. A fixed number of frames is
  *      captured once and replayed as ready-made textures.
+ *   4. Decode still frames off the main loop, and remember the result. On
+ *      Ubuntu 26.04 gdk-pixbuf hands decoding to glycin, a sandboxed loader
+ *      reached over D-Bus, so the "cheap" synchronous call is neither cheap
+ *      nor local: a grid of 24 thumbnails blocked the compositor for over half
+ *      a second, every time the grid was rebuilt. Since the grid is rebuilt on
+ *      every keystroke, a few GIF searches in a row were seconds of freeze and
+ *      a fresh decode of everything already on screen.
  */
 
 import Clutter from 'gi://Clutter';
@@ -28,12 +35,49 @@ import Gio from 'gi://Gio';
 import St from 'gi://St';
 
 const TICK_MS = 40;
-const MAX_ACTIVE = 6;    // animations playing at once
-const MAX_FRAMES = 24;   // frames captured per GIF, then the source is dropped
+const MAX_ACTIVE = 6;      // animations playing at once
+const MAX_FRAMES = 24;     // frames captured per GIF, then the source is dropped
+const THUMB_CACHE_MAX = 160;   // decoded still frames kept for redraws
 
 // Files we have already complained about, so a broken image does not fill the
 // journal. Cleared on disable along with the rest of this module's state.
 const warnedPaths = new Set();
+
+function warnOnce(path, message, error) {
+    if (warnedPaths.has(path))
+        return;
+    warnedPaths.add(path);
+    console.warn(`winclip: ${message} ${path}`, error);
+}
+
+/* Decoded thumbnails, newest last, so the first key is the least recently
+ * used. Every search rebuilds the grid from scratch and the same files keep
+ * coming back — the folder scan, the favourites, the previous page of results
+ * — so without this each keystroke re-decodes everything already on screen.
+ * Entries are keyed by size as well as path, since the clipboard rows and the
+ * GIF cells ask for different thumbnails of the same file.
+ */
+let thumbCache = null;
+
+function thumbKey(path, maxW, maxH) {
+    return `${maxW}x${maxH}|${path}`;
+}
+
+function thumbGet(key) {
+    const hit = thumbCache?.get(key);
+    if (hit) {
+        thumbCache.delete(key);   // reinsert, so it counts as recently used
+        thumbCache.set(key, hit);
+    }
+    return hit ?? null;
+}
+
+function thumbPut(key, entry) {
+    thumbCache ??= new Map();
+    thumbCache.set(key, entry);
+    while (thumbCache.size > THUMB_CACHE_MAX)
+        thumbCache.delete(thumbCache.keys().next().value);
+}
 
 /** Wraps a GdkPixbuf in content an St.Widget can display. */
 export function pixbufToContent(pixbuf) {
@@ -90,10 +134,7 @@ function loadScaledAnimation(path, maxW, maxH, callback) {
         try {
             [, contents] = file.load_contents_finish(res);
         } catch (e) {
-            if (!warnedPaths.has(path)) {
-                warnedPaths.add(path);
-                console.warn(`winclip: cannot read ${path}`, e);
-            }
+            warnOnce(path, 'cannot read', e);
             callback(null);
             return;
         }
@@ -115,10 +156,7 @@ function loadScaledAnimation(path, maxW, maxH, callback) {
             } catch {
                 // already closed
             }
-            if (!warnedPaths.has(path)) {
-                warnedPaths.add(path);
-                console.warn(`winclip: cannot animate ${path}`, e);
-            }
+            warnOnce(path, 'cannot animate', e);
             callback(null);
             return;
         }
@@ -309,6 +347,7 @@ export function stopAllAnimations() {
     ticker?.stop();
     ticker = null;
     warnedPaths.clear();
+    thumbCache = null;
 }
 
 /** How many GIFs are currently animating; useful when diagnosing load. */
@@ -316,40 +355,89 @@ export function activeAnimationCount() {
     return ticker?.activeCount ?? 0;
 }
 
+/* Decodes a still frame without blocking the main loop.
+ *
+ * The synchronous new_from_file_at_scale goes out to the glycin loader over
+ * D-Bus and waits, which stops the compositor dead; the async form lets the
+ * loop keep running while the sandboxed process works. It also fails more
+ * gracefully: glycin caps its own memory, and a large GIF that would have
+ * thrown "out of memory" mid-refresh now just reports back empty.
+ */
+function decodeScaledAsync(path, maxW, maxH, callback) {
+    Gio.File.new_for_path(path).read_async(GLib.PRIORITY_DEFAULT_IDLE, null, (file, res) => {
+        let stream;
+        try {
+            stream = file.read_finish(res);
+        } catch (e) {
+            warnOnce(path, 'cannot read', e);
+            callback(null);
+            return;
+        }
+        GdkPixbuf.Pixbuf.new_from_stream_at_scale_async(
+            stream, maxW, maxH, true, null, (_source, r) => {
+                let pixbuf = null;
+                try {
+                    pixbuf = GdkPixbuf.Pixbuf.new_from_stream_finish(r);
+                } catch (e) {
+                    warnOnce(path, 'cannot decode', e);
+                }
+                stream.close_async(GLib.PRIORITY_LOW, null, () => {});
+                callback(pixbuf);
+            });
+    });
+}
+
 /**
  * Builds an actor showing `path`, animating it if it is a playable GIF.
- * Returns null when the file cannot be decoded at all.
+ *
+ * The actor comes back straight away at its reserved size and fills in once
+ * the file has been decoded, so a grid of them costs the compositor nothing
+ * to build. A file that cannot be decoded shows a placeholder rather than
+ * leaving a hole in the layout.
  */
 export function createImageActor(path, maxW, maxH, {animate = true} = {}) {
-    let still;
-    try {
-        still = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, maxW, maxH, true);
-    } catch (e) {
-        // Rows are rebuilt on every refresh, so complain once per file rather
-        // than on every redraw.
-        if (!warnedPaths.has(path)) {
-            warnedPaths.add(path);
-            console.warn(`winclip: cannot decode ${path}`, e);
-        }
-        return null;
-    }
-
-    const content = pixbufToContent(still);
-    if (!content)
-        return null;
-
-    const actor = new St.Widget({
+    const actor = new St.Bin({
         style_class: 'winclip-thumb',
-        content,
-        width: still.get_width(),
-        height: still.get_height(),
+        width: maxW,
+        height: maxH,
         content_gravity: Clutter.ContentGravity.RESIZE_ASPECT,
         x_align: Clutter.ActorAlign.CENTER,
         y_align: Clutter.ActorAlign.CENTER,
     });
 
-    if (animate && path.toLowerCase().endsWith('.gif'))
-        attachAnimation(actor, path, still.get_width(), still.get_height());
+    const show = entry => {
+        actor.set_content(entry.content);
+        actor.set_size(entry.width, entry.height);
+        if (animate && path.toLowerCase().endsWith('.gif'))
+            attachAnimation(actor, path, entry.width, entry.height);
+    };
+
+    const key = thumbKey(path, maxW, maxH);
+    const cached = thumbGet(key);
+    if (cached) {
+        show(cached);
+        return actor;
+    }
+
+    // The grid is rebuilt as fast as the user types, so by the time a decode
+    // lands its actor is often already gone.
+    let alive = true;
+    actor.connect('destroy', () => {
+        alive = false;
+    });
+
+    decodeScaledAsync(path, maxW, maxH, pixbuf => {
+        if (!alive)
+            return;
+        const content = pixbuf ? pixbufToContent(pixbuf) : null;
+        if (!content) {
+            actor.set_child(new St.Label({style_class: 'winclip-thumb-missing', text: '?'}));
+            return;
+        }
+        const entry = {content, width: pixbuf.get_width(), height: pixbuf.get_height()};
+        thumbPut(key, entry);
+        show(entry);
+    });
 
     return actor;
 }

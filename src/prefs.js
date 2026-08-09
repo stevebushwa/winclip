@@ -371,6 +371,14 @@ export default class WinClipPreferences extends ExtensionPreferences {
         settings.bind('gif-search-limit', limit, 'value', Gio.SettingsBindFlags.DEFAULT);
         group.add(limit);
 
+        const cache = new Adw.SpinRow({
+            title: 'Preview cache',
+            subtitle: 'Megabytes of downloaded previews to keep; oldest go first',
+            adjustment: new Gtk.Adjustment({lower: 16, upper: 1024, step_increment: 16}),
+        });
+        settings.bind('gif-cache-mb', cache, 'value', Gio.SettingsBindFlags.DEFAULT);
+        group.add(cache);
+
         const help = new Adw.ActionRow({
             title: 'Where to get a key',
             subtitle: 'A free account on the Giphy developer portal',

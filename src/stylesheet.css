@@ -135,6 +135,13 @@
   border-radius: 6px;
 }
 
+/* Shown in place of a file that could not be decoded, so the cell keeps its
+   shape instead of collapsing the grid around it. */
+.winclip-thumb-missing {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 18px;
+}
+
 /* ----------------------------------------------------------------- grids */
 
 .winclip-grid {

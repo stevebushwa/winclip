@@ -87,16 +87,10 @@ export class ClipboardTab {
 
         if (item.type === TYPE_IMAGE) {
             const path = this._overlay.store.blobPath(item);
-            const thumb = createImageActor(path, THUMB_W, THUMB_H,
-                {animate: this._overlay.settings.get_boolean('gif-animate')});
-            if (thumb) {
-                body.add_child(thumb);
-            } else {
-                body.add_child(new St.Label({
-                    style_class: 'winclip-row-text',
-                    text: '[unreadable image]',
-                }));
-            }
+            // Fills itself in once decoded; an unreadable file shows a marker
+            // in place rather than collapsing the row.
+            body.add_child(createImageActor(path, THUMB_W, THUMB_H,
+                {animate: this._overlay.settings.get_boolean('gif-animate')}));
             const kb = item.bytes ? `  ·  ${Math.max(1, Math.round(item.bytes / 1024))} KB` : '';
             body.add_child(new St.Label({
                 style_class: 'winclip-row-meta',
@@ -325,6 +319,7 @@ export class GifTab {
         this.columns = Math.max(1, Math.floor(this._overlay.contentWidth / GIF_CELL_W));
 
         const q = (query || '').toLowerCase();
+        this._search.pruneOnce();
 
         // Every source below is async and cached: this draws from whatever is
         // known now, and redraws if fresh results land while the tab is up.
@@ -401,15 +396,11 @@ export class GifTab {
         });
         const thumb = createImageActor(result.path, GIF_CELL_W - 16, GIF_CELL_H - 8,
             {animate: this._overlay.settings.get_boolean('gif-animate')});
-        if (thumb) {
-            button.set_child(thumb);
-            // Whatever the pointer is over gets an animation slot.
-            button.track_hover = true;
-            button.connect('notify::hover',
-                () => setThumbHovered(thumb, button.hover));
-        } else {
-            button.set_child(new St.Label({text: '?', style_class: 'winclip-row-text'}));
-        }
+        button.set_child(thumb);
+        // Whatever the pointer is over gets an animation slot.
+        button.track_hover = true;
+        button.connect('notify::hover',
+            () => setThumbHovered(thumb, button.hover));
 
         const store = this._overlay.store;
         const cell = {

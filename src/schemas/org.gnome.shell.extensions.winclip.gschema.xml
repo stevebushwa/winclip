@@ -132,6 +132,17 @@
       <summary>Your Giphy API key</summary>
     </key>
 
+    <key name="gif-cache-mb" type="i">
+      <default>64</default>
+      <range min="16" max="1024"/>
+      <summary>Disk budget for downloaded GIF previews</summary>
+      <description>
+        Search previews are cached so repeating a search costs nothing. The
+        oldest are dropped once the cache exceeds this. It is emptied when the
+        extension is disabled as well.
+      </description>
+    </key>
+
     <key name="gif-search-limit" type="i">
       <default>24</default>
       <range min="8" max="50"/>

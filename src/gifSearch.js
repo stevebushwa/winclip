@@ -11,7 +11,22 @@
  *
  * Results are fetched as small preview GIFs for the grid; the full-size file
  * is only downloaded when an entry is chosen or pinned. Previews live in a
- * cache directory that is emptied when the extension is disabled.
+ * cache directory held to a size budget, and emptied when the extension is
+ * disabled.
+ *
+ * Three things here exist to keep a run of searches from swamping the shell,
+ * all of them measured rather than guessed:
+ *
+ *   - A search waits for a pause in typing. The grid refreshes on every
+ *     keystroke, and firing a query from each one meant "buzz lightyear" was
+ *     fourteen searches and fourteen sets of downloads, thirteen of which were
+ *     thrown away.
+ *   - Downloads run a few at a time and stream to disk. Reading each response
+ *     into memory first meant a page of results could hold hundreds of
+ *     megabytes at once, waiting on the garbage collector to let go.
+ *   - The cache is pruned to a budget after every search. Wiping it on disable
+ *     was the only cleanup, and that runs asynchronously as the session is
+ *     ending, so it rarely finished: a real cache had grown to 1630 files.
  */
 
 import GLib from 'gi://GLib';
@@ -21,6 +36,10 @@ import Soup from 'gi://Soup?version=3.0';
 const USER_AGENT = 'WinClip (GNOME Shell extension)';
 const TIMEOUT_S = 15;
 const MIN_QUERY = 2;
+const TYPING_PAUSE_MS = 400;      // quiet time before a query is actually sent
+const MAX_PARALLEL = 4;           // preview downloads in flight
+const MAX_PREVIEW_MB = 8;
+const MAX_FULL_MB = 32;
 
 /* Rating is stored provider-independently and mapped per API. */
 const RATINGS = {
@@ -82,6 +101,10 @@ export class GifSearch {
         this._settings = settings;
         this._session = null;
         this._cancellable = null;
+        this._pendingTimer = 0;
+        this._pendingTerm = '';
+        this._pruned = false;
+        this._downloadSeq = 0;
 
         this._results = [];
         this._query = '';
@@ -139,6 +162,11 @@ export class GifSearch {
     }
 
     cancel() {
+        if (this._pendingTimer) {
+            GLib.source_remove(this._pendingTimer);
+            this._pendingTimer = 0;
+        }
+        this._pendingTerm = '';
         this._cancellable?.cancel();
         this._cancellable = null;
         this._searching = false;
@@ -152,10 +180,16 @@ export class GifSearch {
         this._error = null;
     }
 
-    /** Runs a search unless this exact query is already loaded or in flight. */
+    /**
+     * Queues a search unless this exact query is already loaded or in flight.
+     *
+     * Called from every grid refresh, so most calls are a keystroke into a
+     * half-typed word. Nothing is sent until the typing stops.
+     */
     maybeSearch(q, onDone) {
         const term = (q ?? '').trim();
         if (!this.enabled || term.length < MIN_QUERY) {
+            this.cancel();
             if (this._results.length || this._query) {
                 this._results = [];
                 this._query = '';
@@ -163,9 +197,23 @@ export class GifSearch {
             }
             return;
         }
-        if (term === this._query)
+        if (term === this._query || term === this._pendingTerm)
             return;
-        this.search(term, onDone);
+
+        this._pendingTerm = term;
+        // Reported as searching straight away, so the grid says so rather than
+        // flashing "no results" during the pause.
+        this._searching = true;
+        if (this._pendingTimer)
+            GLib.source_remove(this._pendingTimer);
+        this._pendingTimer = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, TYPING_PAUSE_MS, () => {
+                this._pendingTimer = 0;
+                const term_ = this._pendingTerm;
+                this._pendingTerm = '';
+                this.search(term_, onDone);
+                return GLib.SOURCE_REMOVE;
+            });
     }
 
     search(term, onDone) {
@@ -231,31 +279,39 @@ export class GifSearch {
             });
     }
 
-    /* Downloads each small preview, then reports whatever arrived. One bad
-     * result should not sink the whole grid, so failures are simply dropped.
+    /* Downloads the small previews a few at a time, then reports whatever
+     * arrived. One bad result should not sink the whole grid, so failures are
+     * simply dropped.
      */
     _fetchPreviews(items, cancellable, finish) {
         GLib.mkdir_with_parents(this._cacheDir, 0o700);
 
         const done = [];
-        let outstanding = items.length;
+        let started = 0;
+        let active = 0;
+        let settled = 0;
 
-        const settle = () => {
-            if (--outstanding > 0)
-                return;
-            // Preserve the provider's ordering rather than completion order.
-            const rank = new Map(items.map((it, i) => [it.id, i]));
-            done.sort((a, b) => rank.get(a.id) - rank.get(b.id));
-            finish(done, done.length ? null : 'Could not download results.');
+        const pump = () => {
+            while (active < MAX_PARALLEL && started < items.length) {
+                const item = items[started++];
+                active++;
+                this._download(item.preview, cancellable, path => {
+                    if (path)
+                        done.push({...item, path});
+                    active--;
+                    if (++settled === items.length) {
+                        // Provider ordering, not completion order.
+                        const rank = new Map(items.map((it, i) => [it.id, i]));
+                        done.sort((a, b) => rank.get(a.id) - rank.get(b.id));
+                        finish(done, done.length ? null : 'Could not download results.');
+                        this.pruneCache();
+                        return;
+                    }
+                    pump();
+                }, '', MAX_PREVIEW_MB);
+            }
         };
-
-        for (const item of items) {
-            this._download(item.preview, cancellable, path => {
-                if (path)
-                    done.push({...item, path});
-                settle();
-            });
-        }
+        pump();
     }
 
     _cachePath(url, suffix = '') {
@@ -263,43 +319,85 @@ export class GifSearch {
         return GLib.build_filenamev([this._cacheDir, `${digest}${suffix}.gif`]);
     }
 
-    /** Fetches `url` into the cache, reusing the file if already present. */
-    _download(url, cancellable, callback, suffix = '') {
+    /**
+     * Fetches `url` into the cache, reusing the file if already present.
+     *
+     * The body is spliced straight from the socket to the file instead of
+     * being read into memory first, so a page of results costs a few buffers
+     * rather than the sum of every file on it. It lands under a temporary name
+     * and is renamed on success: a download cut short — by a cancelled search,
+     * most often — must not leave a truncated file behind that every later
+     * lookup would then treat as a valid cache hit.
+     */
+    _download(url, cancellable, callback, suffix = '', maxMb = MAX_FULL_MB) {
         const path = this._cachePath(url, suffix);
         if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
             callback(path);
             return;
         }
+        // Unique per attempt: two results can point at the same URL, and a
+        // shared temporary file would have them writing over each other.
+        const partial = Gio.File.new_for_path(`${path}.${++this._downloadSeq}.part`);
+        const discard = () => partial.delete_async(GLib.PRIORITY_LOW, null, (f, r) => {
+            try {
+                f.delete_finish(r);
+            } catch {
+                // nothing was written
+            }
+        });
 
         const message = Soup.Message.new('GET', url);
-        this._session_().send_and_read_async(
+        this._session_().send_async(
             message, GLib.PRIORITY_LOW, cancellable, (session, res) => {
-                let bytes;
+                let input;
                 try {
-                    bytes = session.send_and_read_finish(res);
+                    input = session.send_finish(res);
                 } catch {
                     callback(null);
                     return;
                 }
-                if (message.get_status() !== Soup.Status.OK || !bytes?.get_size()) {
+                const length = message.get_response_headers().get_content_length();
+                if (message.get_status() !== Soup.Status.OK || length > maxMb * 1048576) {
+                    input.close_async(GLib.PRIORITY_LOW, null, () => {});
                     callback(null);
                     return;
                 }
+
+                let output;
                 try {
                     GLib.mkdir_with_parents(this._cacheDir, 0o700);
-                    Gio.File.new_for_path(path).replace_contents_bytes_async(
-                        bytes, null, false, Gio.FileCreateFlags.PRIVATE, cancellable,
-                        (file, wres) => {
-                            try {
-                                file.replace_contents_finish(wres);
-                                callback(path);
-                            } catch {
-                                callback(null);
-                            }
-                        });
+                    output = partial.replace(null, false, Gio.FileCreateFlags.PRIVATE, cancellable);
                 } catch {
+                    input.close_async(GLib.PRIORITY_LOW, null, () => {});
                     callback(null);
+                    return;
                 }
+
+                output.splice_async(
+                    input,
+                    Gio.OutputStreamSpliceFlags.CLOSE_SOURCE |
+                        Gio.OutputStreamSpliceFlags.CLOSE_TARGET,
+                    GLib.PRIORITY_LOW, cancellable, (out, sres) => {
+                        let written = -1;
+                        try {
+                            written = out.splice_finish(sres);
+                        } catch {
+                            // cancelled, or the connection dropped
+                        }
+                        if (written <= 0) {
+                            discard();
+                            callback(null);
+                            return;
+                        }
+                        try {
+                            partial.move(Gio.File.new_for_path(path),
+                                Gio.FileCopyFlags.OVERWRITE, null, null);
+                            callback(path);
+                        } catch {
+                            discard();
+                            callback(null);
+                        }
+                    });
             });
     }
 
@@ -328,6 +426,93 @@ export class GifSearch {
             console.error('winclip: could not save GIF to favourites', e);
             return null;
         }
+    }
+
+    /**
+     * Holds the preview cache to its size budget, oldest first.
+     *
+     * Run after every search rather than only on disable. The disable-time
+     * wipe is asynchronous and fires as the session is ending, so it usually
+     * does not get to finish — which is how a cache reaches 1630 files without
+     * anyone touching it.
+     *
+     * Evicting a file that is still on screen is harmless: the thumbnail is
+     * already uploaded, and choosing the entry re-fetches it. Since the
+     * current page of results is also the newest on disk, oldest-first
+     * eviction reaches it last anyway.
+     */
+    /* Once per session, so a cache left oversized by an earlier run is brought
+     * back into line even if the user never searches again. */
+    pruneOnce() {
+        if (this._pruned)
+            return;
+        this._pruned = true;
+        this.pruneCache();
+    }
+
+    pruneCache() {
+        const budget = this._settings.get_int('gif-cache-mb') * 1048576;
+        Gio.File.new_for_path(this._cacheDir).enumerate_children_async(
+            'standard::name,standard::size,time::modified', Gio.FileQueryInfoFlags.NONE,
+            GLib.PRIORITY_LOW, null, (dir, res) => {
+                let enumerator;
+                try {
+                    enumerator = dir.enumerate_children_finish(res);
+                } catch {
+                    return;   // nothing cached yet
+                }
+                const files = [];
+                let total = 0;
+                const readMore = () => {
+                    enumerator.next_files_async(64, GLib.PRIORITY_LOW, null, (src, r) => {
+                        let infos;
+                        try {
+                            infos = src.next_files_finish(r);
+                        } catch {
+                            infos = [];
+                        }
+                        if (!infos.length) {
+                            src.close_async(GLib.PRIORITY_LOW, null, () => {});
+                            this._evict(files, total, budget);
+                            return;
+                        }
+                        for (const info of infos) {
+                            total += info.get_size();
+                            files.push({
+                                name: info.get_name(),
+                                size: info.get_size(),
+                                mtime: info.get_modification_date_time()?.to_unix() ?? 0,
+                            });
+                        }
+                        readMore();
+                    });
+                };
+                readMore();
+            });
+    }
+
+    _evict(files, total, budget) {
+        if (total <= budget)
+            return;
+        files.sort((a, b) => a.mtime - b.mtime);
+        let over = total - budget;
+        let dropped = 0;
+        for (const file of files) {
+            if (over <= 0)
+                break;
+            over -= file.size;
+            dropped++;
+            Gio.File.new_for_path(GLib.build_filenamev([this._cacheDir, file.name]))
+                .delete_async(GLib.PRIORITY_LOW, null, (f, r) => {
+                    try {
+                        f.delete_finish(r);
+                    } catch {
+                        // already gone
+                    }
+                });
+        }
+        console.debug(`winclip: dropped ${dropped} cached previews to stay under ` +
+            `${Math.round(budget / 1048576)} MB`);
     }
 
     /* Best effort and asynchronous: leftover preview files are harmless, and

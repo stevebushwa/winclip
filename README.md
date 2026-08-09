@@ -113,8 +113,8 @@ treat it as sensitive.
   "Copy Image" still arrive as images.
 - **History** — entry cap plus a total disk budget for stored images, since a
   hundred screenshots at the per-image limit would otherwise be gigabytes.
-- **GIFs** — which folders to scan, how deep, how many results to list, and
-  how a GIF is placed on the clipboard.
+- **GIFs** — which folders to scan, how deep, how many results to list, how a
+  GIF is placed on the clipboard, and the disk budget for search previews.
 
 ### Pasting GIFs
 
@@ -147,12 +147,17 @@ key** adds its results to the GIF tab. No key is bundled — one shipped inside
 an open-source extension would be extracted and revoked — so get a free one
 from the [Giphy developer portal](https://developers.giphy.com/docs/api/).
 
-Results appear once you **type at least two characters**; the tab does not
-call the API just for being opened. Nothing contacts the network until a
-provider is selected, a key entered, and something typed. Results are fetched
-as small previews; the full-size file is downloaded only when you choose or
-pin one, and previews are cached in `~/.local/share/winclip/cache/`, which is
-emptied when the extension is disabled.
+Results appear once you **type at least two characters** and pause; the tab
+does not call the API on every keystroke, nor just for being opened. Nothing
+contacts the network until a provider is selected, a key entered, and
+something typed.
+
+Results are fetched as small previews, a few at a time and streamed to disk;
+the full-size file is downloaded only when you choose or pin one. Previews are
+cached in `~/.local/share/winclip/cache/` and held to a size budget you can
+set in preferences — 64 MB by default, oldest dropped first — so repeating a
+search is free without the cache growing without end. It is also emptied when
+the extension is disabled.
 
 Tenor is not offered: Google stopped issuing keys on 13 January 2026 and shut
 the public API down on 30 June 2026.
